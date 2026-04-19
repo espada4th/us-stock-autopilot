@@ -1,4 +1,4 @@
-<\!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -94,7 +94,7 @@
   let DATA;
   try {
     const resp = await fetch('dataset.json?t=' + Date.now());
-    if (\!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     DATA = await resp.json();
   } catch(e){
     app.innerHTML = '<div class="err">Failed to load dataset.json: ' + e.message + '</div>';
@@ -105,7 +105,7 @@
   function fmt(n,d){ if(d==null)d=2; if(n==null||isNaN(n))return '\u2014'; return (typeof n==='number')?n.toFixed(d):n; }
   function pct(n,d){ if(d==null)d=2; if(n==null||isNaN(n))return '\u2014'; return (n>=0?'+':'')+n.toFixed(d)+'%'; }
   function cls(n){ return n>0?'pos':(n<0?'neg':'neu'); }
-  function sig(s){ if(\!s)return 'bdg-hold'; s=s.toLowerCase(); if(s.indexOf('buy')>=0)return 'bdg-buy'; if(s.indexOf('sell')>=0)return 'bdg-sell'; return 'bdg-hold'; }
+  function sig(s){ if(!s)return 'bdg-hold'; s=s.toLowerCase(); if(s.indexOf('buy')>=0)return 'bdg-buy'; if(s.indexOf('sell')>=0)return 'bdg-sell'; return 'bdg-hold'; }
 
   function avg(xs){ xs = xs.filter(x => typeof x === 'number'); return xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : 0; }
   const tickers = DATA.tickers || [];
@@ -195,7 +195,7 @@
     if (v==null && d==null) return;
     const card = document.createElement('div');
     card.className = 'si';
-    card.innerHTML = `<div class="sym">${lab}</div><div class="p">${v\!=null?Number(v).toLocaleString():'\u2014'}</div>${d\!=null?`<div class="${cls(d)}" style="font-size:11px;font-weight:600">${pct(d)}</div>`:''}`;
+    card.innerHTML = `<div class="sym">${lab}</div><div class="p">${v!=null?Number(v).toLocaleString():'\u2014'}</div>${d!=null?`<div class="${cls(d)}" style="font-size:11px;font-weight:600">${pct(d)}</div>`:''}`;
     snapRoot.appendChild(card);
   });
 
@@ -215,7 +215,7 @@
     filter = filter||'all'; search = (search||'').toLowerCase();
     cardRoot.innerHTML = '';
     tickers.filter(t=>{
-      if (filter\!=='all' && (t.groups||[]).indexOf(filter)<0) return false;
+      if (filter!=='all' && (t.groups||[]).indexOf(filter)<0) return false;
       if (search && t.ticker.toLowerCase().indexOf(search)<0) return false;
       return true;
     }).forEach(t=>{
@@ -234,9 +234,9 @@
         <div><div class="bar52"><div class="fill" style="width:100%"></div><div class="mk" style="left:${pos52}%"></div></div>
         <div class="bar52-labels"><span>L $${fmt(t.low_52w)}</span><span>${pos52.toFixed(0)}% of 52w</span><span>H $${fmt(t.high_52w)}</span></div></div>
         <div class="badges">
-          <span class="bdg ${sig(t.analyst_consensus)}">${t.analyst_consensus||'\u2014'}${upside\!=null?' &middot; '+pct(upside,0):''}</span>
-          ${(t.days_to_earn\!=null && t.days_to_earn<=14)?`<span class="bdg bdg-earn">Earnings in ${t.days_to_earn}d</span>`:''}
-          ${(t.sentiment\!=null)?`<span class="bdg bdg-sent">${t.sentiment>=0?'+':''}${Number(t.sentiment).toFixed(2)} sent</span>`:''}
+          <span class="bdg ${sig(t.analyst_consensus)}">${t.analyst_consensus||'\u2014'}${upside!=null?' &middot; '+pct(upside,0):''}</span>
+          ${(t.days_to_earn!=null && t.days_to_earn<=14)?`<span class="bdg bdg-earn">Earnings in ${t.days_to_earn}d</span>`:''}
+          ${(t.sentiment!=null)?`<span class="bdg bdg-sent">${t.sentiment>=0?'+':''}${Number(t.sentiment).toFixed(2)} sent</span>`:''}
           ${(t.pos_52w_pct>95)?'<span class="bdg bdg-warn">Near high</span>':''}
         </div>`;
       cardRoot.appendChild(card);
@@ -273,7 +273,7 @@
 
   // Upcoming earnings
   const earnRoot = document.getElementById('earn-root');
-  tickers.filter(t=>t.days_to_earn\!=null && t.days_to_earn<=30)
+  tickers.filter(t=>t.days_to_earn!=null && t.days_to_earn<=30)
     .sort((a,b)=>a.days_to_earn-b.days_to_earn)
     .forEach(t=>{
       const tr = document.createElement('tr');
@@ -288,7 +288,7 @@
     filter = filter||'all'; search = (search||'').toLowerCase();
     const tbody = document.getElementById('tbl-body'); tbody.innerHTML = '';
     const rows = tickers.filter(t=>{
-      if (filter\!=='all' && (t.groups||[]).indexOf(filter)<0) return false;
+      if (filter!=='all' && (t.groups||[]).indexOf(filter)<0) return false;
       if (search && t.ticker.toLowerCase().indexOf(search)<0) return false;
       return true;
     }).map(t=>{ const o={...t}; o.upside_pct = (t.target_consensus && t.last_price)?((t.target_consensus-t.last_price)/t.last_price*100):null; return o; });
@@ -305,17 +305,17 @@
         <td class="${cls(t.ytd)}">${pct(t.ytd,1)}</td>
         <td class="${cls(t.y1)}">${pct(t.y1,1)}</td>
         <td>${fmt(t.pos_52w_pct,0)}%</td>
-        <td>${t.pe_ttm\!=null?fmt(t.pe_ttm,1):'\u2014'}</td>
+        <td>${t.pe_ttm!=null?fmt(t.pe_ttm,1):'\u2014'}</td>
         <td>${fmt(t.ps_ttm,1)}</td>
-        <td>${t.peg_forward\!=null?fmt(t.peg_forward,2):'\u2014'}</td>
+        <td>${t.peg_forward!=null?fmt(t.peg_forward,2):'\u2014'}</td>
         <td class="${(t.roe_pct||0)>=0?'pos':'neg'}">${fmt(t.roe_pct,1)}%</td>
         <td>${fmt(t.gross_margin,1)}%</td>
         <td class="${(t.net_margin||0)>=0?'pos':'neg'}">${fmt(t.net_margin,1)}%</td>
         <td><span class="bdg ${sig(t.analyst_consensus)}">${t.analyst_consensus||'\u2014'}</span></td>
         <td>$${fmt(t.target_consensus)}</td>
-        <td class="${(t.upside_pct||0)>=0?'pos':'neg'}">${t.upside_pct\!=null?pct(t.upside_pct,0):'\u2014'}</td>
-        <td class="${cls(t.sentiment)}">${t.sentiment\!=null?(t.sentiment>=0?'+':'')+Number(t.sentiment).toFixed(2):'\u2014'}</td>
-        <td class="${(t.days_to_earn||99)<=7?'neg':(t.days_to_earn||99)<=14?'neu':''}">${t.days_to_earn\!=null?t.days_to_earn:'\u2014'}</td>`;
+        <td class="${(t.upside_pct||0)>=0?'pos':'neg'}">${t.upside_pct!=null?pct(t.upside_pct,0):'\u2014'}</td>
+        <td class="${cls(t.sentiment)}">${t.sentiment!=null?(t.sentiment>=0?'+':'')+Number(t.sentiment).toFixed(2):'\u2014'}</td>
+        <td class="${(t.days_to_earn||99)<=7?'neg':(t.days_to_earn||99)<=14?'neu':''}">${t.days_to_earn!=null?t.days_to_earn:'\u2014'}</td>`;
       tbody.appendChild(tr);
     });
   }
