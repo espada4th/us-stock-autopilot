@@ -22,7 +22,7 @@ gh-pages-deploy/
 ### 1. สร้าง repo ใหม่บน GitHub
 
 ไปที่ https://github.com/new แล้วสร้าง repo:
-- **Owner**: TOTHEMOON
+- **Owner**: espada4th
 - **Repository name**: `us-stock-autopilot` (หรือชื่ออื่นที่ต้องการ)
 - **Visibility**: Public (GitHub Pages ฟรีต้อง public)
 - **อย่าเลือก** "Add README / .gitignore / license" — เราจะ push จากเครื่องเอง
@@ -36,7 +36,7 @@ git init
 git add .
 git commit -m "initial deploy: US stock autopilot dashboard"
 git branch -M main
-git remote add origin https://github.com/TOTHEMOON/us-stock-autopilot.git
+git remote add origin https://github.com/espada4th/us-stock-autopilot.git
 git push -u origin main
 ```
 
@@ -47,7 +47,7 @@ git push -u origin main
 1. ไปที่ repo → **Settings** → **Pages**
 2. **Source**: เลือก **GitHub Actions**
 3. รอ workflow `pages.yml` รันจบ (ประมาณ 1-2 นาที) — ดูได้ที่แท็บ **Actions**
-4. URL ของ dashboard จะเป็น: `https://tothemoon.github.io/us-stock-autopilot/`
+4. URL ของ dashboard จะเป็น: `https://espada4th.github.io/us-stock-autopilot/`
 
 ### 4. (Optional) เปิด Data Refresh อัตโนมัติ
 
