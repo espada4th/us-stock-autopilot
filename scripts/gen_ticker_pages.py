@@ -56,13 +56,20 @@ def main():
         out.write_text(page, encoding="utf-8")
         keep.add(out.name)
 
-    # Clean up stale .html files for symbols no longer in top-N
+    # Clean up stale .html files for symbols no longer in top-N.
+    # BUT always preserve the template file (TEMPLATE_FILE.name) — it's the
+    # source for gen_ticker_pages.py itself on subsequent runs. If AAPL drops
+    # out of top-50, we want AAPL.html to remain (as template) but display
+    # a "not in top-50 anymore" state.
+    template_name = TEMPLATE_FILE.name
     removed = 0
     for f in TICKERS.glob("*.html"):
+        if f.name == template_name:
+            continue  # never delete the template
         if f.name not in keep:
             f.unlink()
             removed += 1
-    print(f"Wrote {len(symbols)} pages; removed {removed} stale pages.")
+    print(f"Wrote {len(symbols)} pages; removed {removed} stale pages (template {template_name} preserved).")
     return 0
 
 
