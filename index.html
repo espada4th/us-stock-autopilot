@@ -274,20 +274,21 @@ function sigClass(s) {
   if (s.includes('support')) return 'sig-sup';
   return '';
 }
-function sparkSvg(closes, w=80, h=24) {
+function sparkSvg(closes, w, h) {
+  w = w || 80; h = h || 24;
   if (!closes || closes.length < 2) return '';
-  const lo = Math.min(...closes), hi = Math.max(...closes);
+  const lo = Math.min.apply(null, closes), hi = Math.max.apply(null, closes);
   const rng = (hi - lo) || 1;
   const pad = 2;
-  const pts = closes.map((c, i) => {
+  const pts = closes.map(function(c, i) {
     const x = pad + (i / (closes.length - 1)) * (w - pad*2);
     const y = pad + (1 - (c - lo) / rng) * (h - pad*2);
     return [x.toFixed(1), y.toFixed(1)];
   });
-  const line = 'M' + pts.map(p => p.join(',')).join('L');
-  const area = line + `L${pts[pts.length-1][0]},${h} L${pts[0][0]},${h} Z`;
+  const line = 'M' + pts.map(function(p){return p.join(',');}).join('L');
+  const area = line + 'L' + pts[pts.length-1][0] + ',' + h + ' L' + pts[0][0] + ',' + h + ' Z';
   const up = closes[closes.length - 1] >= closes[0];
-  return `<svg class="spark ${up?'up':'down'}" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path class="fill" d="${area}"/><path d="${line}"/></svg>`;
+  return '<svg class="spark ' + (up?'up':'down') + '" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '"><path class="fill" d="' + area + '"/><path d="' + line + '"/></svg>';
 }
 
 function relativeTime(iso) {
@@ -322,89 +323,98 @@ function sigLabel(s) {
     'fair_value_discount_>10pct': 'FV -10%',
     'near_support_level': 'NEAR SUP',
     'near_bb_lower': 'NEAR BB',
-    'wide_moat_4star': 'WIDE ★',
+    'wide_moat_4star': 'WIDE *',
   };
   return map[s] || s.replace(/_/g,' ').toUpperCase();
 }
 
 function buildKPIs() {
-  const s = DATA.summary;
-  const html = [
-    ['Universe', s.total_tickers, 'tickers'],
-    ['Avg Dip Score', s.avg_dip_score, '/100'],
-    ['High Conviction', s.high_conviction_count, 'ScoreR≥80'],
-    ['Near Support', s.near_support_count, 'dist<3%'],
-    ['RSI Oversold', s.rsi_oversold_count, 'RSI<35'],
-    ['Avg FV Discount', s.fair_value_discount_avg_pct.toFixed(1)+'%', 'vs Fair Value'],
-  ].map(([l,v,sub]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}<small>${sub}</small></div></div>`).join('');
+  const s = DATA.summary || {};
+  const fvd = s.fair_value_discount_avg_pct;
+  const fvdStr = (fvd != null && !isNaN(fvd)) ? fvd.toFixed(1) + '%' : '—';
+  const rows = [
+    ['Universe', s.total_tickers || 0, 'tickers'],
+    ['Avg Dip Score', s.avg_dip_score || 0, '/100'],
+    ['High Conviction', s.high_conviction_count || 0, 'Score>=75'],
+    ['Near Support', s.near_support_count || 0, 'dist<3%'],
+    ['RSI Oversold', s.rsi_oversold_count || 0, 'RSI<35'],
+    ['Avg FV Discount', fvdStr, 'vs Fair Value'],
+  ];
+  const html = rows.map(function(r){
+    return '<div class="kpi"><div class="label">' + r[0] + '</div><div class="value">' + r[1] + '<small>' + r[2] + '</small></div></div>';
+  }).join('');
   document.getElementById('kpis').innerHTML = html;
 }
 
 function buildFilters() {
   const all = DATA.tickers;
-  const sectors = [...new Set(all.map(t => t.sector))].sort();
+  const sectors = Array.from(new Set(all.map(function(t){return t.sector;}))).sort();
   const chips = [
-    { id:'all', label:'All', fn: t => true },
-    { id:'high_conv', label:'High Conviction', fn: t => t.dip_score >= 75 },
-    { id:'deep_value', label:'Deep Value', fn: t => t.val.discount_to_fv_pct > 15 },
-    { id:'oversold', label:'Oversold Recovery', fn: t => t.tech.rsi_14 < 40 && t.tech.macd_signal === 'bullish_cross' },
-    { id:'near_support', label:'Near Support', fn: t => {
-      const p = t.price, s = t.tech.support; return p && s && ((p - s) / s) < 0.03 && p >= s;
+    { id:'all', label:'All', fn: function(t){return true;} },
+    { id:'high_conv', label:'High Conviction', fn: function(t){return t.dip_score >= 75;} },
+    { id:'deep_value', label:'Deep Value', fn: function(t){return t.val && t.val.discount_to_fv_pct > 15;} },
+    { id:'oversold', label:'Oversold Recovery', fn: function(t){return t.tech && t.tech.rsi_14 < 40 && t.tech.macd_signal === 'bullish_cross';} },
+    { id:'near_support', label:'Near Support', fn: function(t){
+      const p = t.price, s = t.tech && t.tech.support; return p && s && ((p - s) / s) < 0.03 && p >= s;
     }},
-    { id:'earnings_soon', label:'Earnings ≤14d', fn: t => t.catalyst && t.catalyst.days_to_earn != null && t.catalyst.days_to_earn <= 14 },
-    { id:'wide_moat', label:'Wide Moat', fn: t => t.val.moat === 'Wide' },
+    { id:'earnings_soon', label:'Earnings <=14d', fn: function(t){return t.catalyst && t.catalyst.days_to_earn != null && t.catalyst.days_to_earn <= 14;} },
+    { id:'wide_moat', label:'Wide Moat', fn: function(t){return t.val && t.val.moat === 'Wide';} },
   ];
   let html = '';
-  chips.forEach(c => {
+  chips.forEach(function(c){
     const n = all.filter(c.fn).length;
-    html += `<span class="chip ${state.filter===c.id?'active':''}" data-f="${c.id}">${c.label}<span class="count">${n}</span></span>`;
+    html += '<span class="chip ' + (state.filter===c.id?'active':'') + '" data-f="' + c.id + '">' + c.label + '<span class="count">' + n + '</span></span>';
   });
   html += '<span class="chip-sep"></span>';
-  sectors.forEach(s => {
-    const n = all.filter(t => t.sector === s).length;
-    const cls = state.sector === s ? 'active' : '';
-    html += `<span class="chip ${cls}" data-s="${s}">${s}<span class="count">${n}</span></span>`;
+  sectors.forEach(function(sec){
+    const n = all.filter(function(t){return t.sector === sec;}).length;
+    const cls = state.sector === sec ? 'active' : '';
+    html += '<span class="chip ' + cls + '" data-s="' + sec + '">' + sec + '<span class="count">' + n + '</span></span>';
   });
-  html += `<input class="search-input" id="search" type="text" placeholder="Search symbol…" value="${state.search}">`;
+  html += '<input class="search-input" id="search" type="text" placeholder="Search symbol..." value="' + state.search + '">';
   const f = document.getElementById('filters');
   f.innerHTML = html;
-  f.querySelectorAll('[data-f]').forEach(el => el.onclick = () => { state.filter = el.dataset.f; buildFilters(); renderTable(); });
-  f.querySelectorAll('[data-s]').forEach(el => el.onclick = () => { state.sector = state.sector === el.dataset.s ? null : el.dataset.s; buildFilters(); renderTable(); });
+  f.querySelectorAll('[data-f]').forEach(function(el){
+    el.onclick = function(){ state.filter = el.dataset.f; buildFilters(); renderTable(); };
+  });
+  f.querySelectorAll('[data-s]').forEach(function(el){
+    el.onclick = function(){ state.sector = state.sector === el.dataset.s ? null : el.dataset.s; buildFilters(); renderTable(); };
+  });
   const si = document.getElementById('search');
-  si.oninput = (e) => { state.search = e.target.value.toLowerCase(); renderTable(); };
-  si.focus();
+  si.oninput = function(e){ state.search = e.target.value.toLowerCase(); renderTable(); };
 }
 
 function getFiltered() {
   const all = DATA.tickers.slice();
-  const chipFn = {
-    all: t => true,
-    high_conv: t => t.dip_score >= 75,
-    deep_value: t => t.val.discount_to_fv_pct > 15,
-    oversold: t => t.tech.rsi_14 < 40 && t.tech.macd_signal === 'bullish_cross',
-    near_support: t => { const p=t.price, s=t.tech.support; return p && s && ((p-s)/s)<0.03 && p>=s; },
-    earnings_soon: t => t.catalyst && t.catalyst.days_to_earn!=null && t.catalyst.days_to_earn<=14,
-    wide_moat: t => t.val.moat === 'Wide',
-  }[state.filter] || (t => true);
+  const filters = {
+    all: function(t){return true;},
+    high_conv: function(t){return t.dip_score >= 75;},
+    deep_value: function(t){return t.val && t.val.discount_to_fv_pct > 15;},
+    oversold: function(t){return t.tech && t.tech.rsi_14 < 40 && t.tech.macd_signal === 'bullish_cross';},
+    near_support: function(t){ const p=t.price, s=t.tech && t.tech.support; return p && s && ((p-s)/s)<0.03 && p>=s; },
+    earnings_soon: function(t){return t.catalyst && t.catalyst.days_to_earn!=null && t.catalyst.days_to_earn<=14;},
+    wide_moat: function(t){return t.val && t.val.moat === 'Wide';},
+  };
+  const chipFn = filters[state.filter] || function(t){return true;};
   return all
     .filter(chipFn)
-    .filter(t => !state.sector || t.sector === state.sector)
-    .filter(t => !state.search || t.symbol.toLowerCase().includes(state.search) || t.name.toLowerCase().includes(state.search));
+    .filter(function(t){return !state.sector || t.sector === state.sector;})
+    .filter(function(t){return !state.search || t.symbol.toLowerCase().includes(state.search) || t.name.toLowerCase().includes(state.search);});
 }
 
 function sortRows(rows) {
   const k = state.sortKey, d = state.sortDir;
-  const get = t => {
+  const get = function(t){
     switch(k) {
-      case 'rsi': return t.tech.rsi_14;
-      case 'discount_to_fv_pct': return t.val.discount_to_fv_pct;
-      case 'star_rating': return t.val.star_rating;
+      case 'rsi': return t.tech && t.tech.rsi_14;
+      case 'discount_to_fv_pct': return t.val && t.val.discount_to_fv_pct;
+      case 'star_rating': return t.val && t.val.star_rating;
       case 'days_to_earn': return t.catalyst ? t.catalyst.days_to_earn : 9999;
-      case 'entry_low': return t.entry.entry_low;
+      case 'entry_low': return t.entry && t.entry.entry_low;
       default: return t[k];
     }
   };
-  rows.sort((a,b) => {
+  rows.sort(function(a,b){
     const va = get(a), vb = get(b);
     if (typeof va === 'string') return d * va.localeCompare(vb);
     return d * ((va||0) - (vb||0));
@@ -416,17 +426,80 @@ function renderTable() {
   const rows = sortRows(getFiltered());
   const tbody = document.getElementById('tbody');
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="14" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>`;
+    tbody.innerHTML = '<tr><td colspan="14" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>';
   } else {
-    tbody.innerHTML = rows.map(t => {
+    tbody.innerHTML = rows.map(function(t){
       const dc = dipClass(t.dip_score);
-      const rc = rsiClass(t.tech.rsi_14);
-      const sigs = (t.dip_signals || []).slice(0,4).map(s => `<span class="sig ${sigClass(s)}">${sigLabel(s)}</span>`).join('');
+      const rc = rsiClass(t.tech && t.tech.rsi_14);
+      const sigs = (t.dip_signals || []).slice(0,4).map(function(s){
+        return '<span class="sig ' + sigClass(s) + '">' + sigLabel(s) + '</span>';
+      }).join('');
       const earn = t.catalyst && t.catalyst.days_to_earn != null ? (t.catalyst.days_to_earn + 'd') : '—';
       const earnCls = t.catalyst && t.catalyst.days_to_earn != null && t.catalyst.days_to_earn <= 14 ? 'pos' : 'neu';
-      return `<tr onclick="location.href='ticker/${t.symbol}.html'">
-        <td><div class="sym">${t.symbol}</div><div class="sym-name">${t.name}</div></td>
-        <td class="col-hide-md"><span class="sector-tag">${t.sector}</span></td>
-        <td class="num">${fmtPrice(t.price)}</td>
-        <td class="num ${pctCls(t.change_d1_pct)}">${fmtPct(t.change_d1_pct)}</td>
-        <td class="num col-hide-sm ${pctCls(t.change_1m_pct)}">${
+      const fvd = t.val ? t.val.discount_to_fv_pct : null;
+      const rsi = t.tech ? t.tech.rsi_14 : null;
+      const star = t.val ? t.val.star_rating : null;
+      const entryLo = t.entry ? t.entry.entry_low : null;
+      const entryHi = t.entry ? t.entry.entry_high : null;
+      const entryTxt = (entryLo != null && entryHi != null) ? ('$' + entryLo.toFixed(0) + '-$' + entryHi.toFixed(0)) : '—';
+      const closes = t.history ? t.history.closes : [];
+      return '<tr onclick="location.href=\'ticker/' + t.symbol + '.html\'">' +
+        '<td><div class="sym">' + t.symbol + '</div><div class="sym-name">' + t.name + '</div></td>' +
+        '<td class="col-hide-md"><span class="sector-tag">' + t.sector + '</span></td>' +
+        '<td class="num">' + fmtPrice(t.price) + '</td>' +
+        '<td class="num ' + pctCls(t.change_d1_pct) + '">' + fmtPct(t.change_d1_pct) + '</td>' +
+        '<td class="num col-hide-sm ' + pctCls(t.change_1m_pct) + '">' + fmtPct(t.change_1m_pct) + '</td>' +
+        '<td class="num ' + pctCls(t.pullback_from_high_pct) + '">' + fmtPct(t.pullback_from_high_pct) + '</td>' +
+        '<td class="num col-hide-sm"><span class="rsi-pill ' + rc + '">' + fmtNum(rsi, 0) + '</span></td>' +
+        '<td class="num"><span class="dip-badge ' + dc + '">' + t.dip_score + '</span></td>' +
+        '<td class="num col-hide-md ' + (fvd != null && fvd > 0 ? 'pos' : 'neg') + '">' + fmtPct(fvd) + '</td>' +
+        '<td class="num col-hide-md">' + stars(star) + '</td>' +
+        '<td class="num col-hide-md ' + earnCls + '">' + earn + '</td>' +
+        '<td class="num col-hide-sm">' + entryTxt + '</td>' +
+        '<td class="col-hide-md">' + sparkSvg(closes) + '</td>' +
+        '<td class="col-hide-sm"><div class="signals">' + sigs + '</div></td>' +
+      '</tr>';
+    }).join('');
+  }
+  document.getElementById('scanner').style.display = 'table';
+  document.getElementById('state').style.display = 'none';
+}
+
+function bindHeaderSort() {
+  document.querySelectorAll('th').forEach(function(th){
+    const k = th.dataset.k;
+    if (!k) return;
+    th.onclick = function(){
+      if (state.sortKey === k) state.sortDir = -state.sortDir;
+      else { state.sortKey = k; state.sortDir = -1; }
+      document.querySelectorAll('th').forEach(function(t){t.classList.remove('sorted');});
+      th.classList.add('sorted');
+      renderTable();
+    };
+  });
+}
+
+async function load() {
+  try {
+    const r = await fetch('dataset.json?v=' + Date.now());
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    DATA = await r.json();
+    document.getElementById('asof').textContent = DATA.as_of || '—';
+    document.getElementById('asof2').textContent = DATA.as_of || '—';
+    document.getElementById('universe').textContent = DATA.universe_label || '';
+    buildKPIs();
+    buildFilters();
+    renderTable();
+    bindHeaderSort();
+    updateAgo();
+    setInterval(updateAgo, 30000);
+  } catch (e) {
+    document.getElementById('state').innerHTML = '<div style="color:var(--red); padding:20px;">Failed to load data: ' + e.message + '</div>';
+    console.error(e);
+  }
+}
+
+load();
+</script>
+</body>
+</html>

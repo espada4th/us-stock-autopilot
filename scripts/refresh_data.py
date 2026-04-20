@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Refresh dataset.json hourly (v2 schema — buy-the-dip scanner).
+Refresh dataset.json hourly (v2 schema - buy-the-dip scanner).
 
 Schedule (via refresh.yml):
-  Hourly, Mon 08:00 Thai → Sat 08:00 Thai (UTC+7).
-  Window is Mon 01:00 UTC → Sat 01:00 UTC.
+  Hourly, Mon 08:00 Thai -> Sat 08:00 Thai (UTC+7).
+  Window is Mon 01:00 UTC -> Sat 01:00 UTC.
 
 Priority for price source:
-  1. Bigdata.com (preferred) — needs BIGDATA_API_KEY secret
-  2. FMP (Financial Modeling Prep) — needs FMP_API_KEY secret
+  1. Bigdata.com (preferred) - needs BIGDATA_API_KEY secret
+  2. FMP (Financial Modeling Prep) - needs FMP_API_KEY secret
 
-If neither secret is set the script only bumps `generated_at` so the workflow
+If neither secret is set the script only bumps generated_at so the workflow
 stays green (lets you deploy first, add API key later).
 
 Per-run updates:
@@ -48,7 +49,7 @@ def _save(data):
         json.dump(data, f, separators=(",", ":"), ensure_ascii=False)
 
 
-def _recompute_derived(t: dict) -> None:
+def _recompute_derived(t):
     price = t.get("price")
     hi, lo = t.get("high_52w"), t.get("low_52w")
     if price and hi and lo and hi > lo:
@@ -64,7 +65,7 @@ def _recompute_derived(t: dict) -> None:
         val["analyst_upside_pct"] = round(100 * (tm - price) / price, 1)
 
 
-def _append_history(t: dict, today: str) -> None:
+def _append_history(t, today):
     """Append today's close once per UTC date. If today already exists, update."""
     hist = t.setdefault("history", {"dates": [], "closes": []})
     dates = hist.get("dates", [])
@@ -77,7 +78,6 @@ def _append_history(t: dict, today: str) -> None:
     else:
         dates.append(today)
         closes.append(round(price, 2))
-    # Cap to last N days
     if len(dates) > HISTORY_CAP:
         hist["dates"] = dates[-HISTORY_CAP:]
         hist["closes"] = closes[-HISTORY_CAP:]
@@ -86,20 +86,20 @@ def _append_history(t: dict, today: str) -> None:
         hist["closes"] = closes
 
 
-def refresh_via_fmp(data: dict) -> bool:
+def refresh_via_fmp(data):
     import requests
     tickers = data.get("tickers", [])
     syms = ",".join(t["symbol"] for t in tickers if t.get("symbol"))
     if not syms:
         return False
 
-    url = f"https://financialmodelingprep.com/api/v3/quote/{syms}?apikey={FMP_KEY}"
+    url = "https://financialmodelingprep.com/api/v3/quote/{}?apikey={}".format(syms, FMP_KEY)
     try:
         r = requests.get(url, timeout=20)
         r.raise_for_status()
         quotes = {q["symbol"]: q for q in r.json()}
     except Exception as e:
-        print(f"FMP fetch failed: {e}", file=sys.stderr)
+        print("FMP fetch failed: {}".format(e), file=sys.stderr)
         return False
 
     today_utc = dt.datetime.utcnow().strftime("%Y-%m-%d")
@@ -121,17 +121,16 @@ def refresh_via_fmp(data: dict) -> bool:
             t["market_cap_b"] = round(q["marketCap"] / 1e9, 2)
         _recompute_derived(t)
         _append_history(t, today_utc)
-    print(f"FMP: updated {updated}/{len(tickers)} tickers")
+    print("FMP: updated {}/{} tickers".format(updated, len(tickers)))
     return updated > 0
 
 
-def refresh_via_bigdata(data: dict) -> bool:
-    # Placeholder — wire up bigdata.com endpoints here when ready.
-    print("Bigdata.com refresh not implemented — falling through.")
+def refresh_via_bigdata(data):
+    print("Bigdata.com refresh not implemented - falling through.")
     return False
 
 
-def _regen_summary(data: dict) -> None:
+def _regen_summary(data):
     tickers = data.get("tickers", [])
     if not tickers:
         return
@@ -163,13 +162,13 @@ def main():
         ok = refresh_via_fmp(data)
 
     if not ok:
-        print("No API key configured — bumping timestamp only.")
+        print("No API key configured - bumping timestamp only.")
         print("Add BIGDATA_API_KEY or FMP_API_KEY as repo secrets to enable refresh.")
     else:
         _regen_summary(data)
 
     _save(data)
-    print(f"Wrote {DATASET} ({DATASET.stat().st_size} bytes) · as_of={data.get('as_of')}")
+    print("Wrote {} ({} bytes) - as_of={}".format(DATASET, DATASET.stat().st_size, data.get("as_of")))
     return 0
 
 
