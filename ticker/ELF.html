@@ -108,6 +108,30 @@
   .dip-score.s50 { background:rgba(245,196,81,0.14); color:var(--yellow); border:1px solid rgba(245,196,81,0.35); }
   .dip-score.s0  { background:var(--panel-2); color:var(--muted); border:1px solid var(--line); }
 
+  /* Momentum score (side-by-side with dip score) */
+  .mom-score {
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    width:90px; height:100px; border-radius:14px; flex-shrink:0;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .mom-score .n { font-size:34px; font-weight:800; letter-spacing:-0.04em; line-height:1; }
+  .mom-score .d { font-size:11px; opacity:0.5; margin-top:-2px; }
+  .mom-score .l { font-size:10px; letter-spacing:0.08em; margin-top:4px; opacity:0.7; }
+  .mom-score.m25 { background:rgba(34,211,160,0.18); color:var(--green); border:1px solid rgba(34,211,160,0.4); }
+  .mom-score.m15 { background:rgba(91,155,255,0.18); color:var(--blue); border:1px solid rgba(91,155,255,0.4); }
+  .mom-score.m10 { background:rgba(245,196,81,0.14); color:var(--yellow); border:1px solid rgba(245,196,81,0.35); }
+  .mom-score.m0  { background:rgba(255,90,106,0.14); color:var(--red); border:1px solid rgba(255,90,106,0.35); }
+
+  /* Rotation flag pill */
+  .rot-flag {
+    display:inline-block; padding:3px 10px; border-radius:999px;
+    font-size:11px; font-weight:700; letter-spacing:0.04em;
+    margin-left:8px; vertical-align:middle;
+  }
+  .rot-flag.setup_ready   { background:rgba(34,211,160,0.22);  color:var(--green); border:1px solid rgba(34,211,160,0.35); }
+  .rot-flag.wait_confirm  { background:rgba(245,196,81,0.18);  color:var(--yellow); border:1px solid rgba(245,196,81,0.35); }
+  .rot-flag.falling_knife { background:rgba(255,90,106,0.2);   color:var(--red); border:1px solid rgba(255,90,106,0.35); }
+
   .dip-head { flex:1; min-width:240px; }
   .dip-head .h { font-size:17px; font-weight:700; color:var(--text); letter-spacing:-0.01em; margin-bottom:6px; line-height:1.4; }
   .dip-head .p { font-size:13px; color:var(--muted); line-height:1.6; }
@@ -279,7 +303,7 @@
 
 <script>
 // SYMBOL is injected by generator - replace "AAPL"
-const SYMBOL = "BMI";
+const SYMBOL = "ELF";
 
 // ===================== formatters =====================
 function stars(n) {
@@ -434,10 +458,39 @@ function renderHero(t) {
   </div>`;
 }
 
+function momCls(n) {
+  if (n == null) return 'm0';
+  if (n >= 25) return 'm25';
+  if (n >= 15) return 'm15';
+  if (n >= 10) return 'm10';
+  return 'm0';
+}
+function rotMeta(r) {
+  // Returns [label, explainer]
+  if (r === 'setup_ready')   return ['🎯 SETUP READY', 'ดีลลึก + momentum กลับขึ้นแล้ว — actionable'];
+  if (r === 'wait_confirm')  return ['⏳ WAIT CONFIRM', 'ดีลลึก แต่ momentum ยังไม่มา — รอสัญญาณ reversal'];
+  if (r === 'falling_knife') return ['🔪 FALLING KNIFE', 'ดีลลึกมาก แต่ยังลงต่อเนื่อง — หลีกเลี่ยง'];
+  return ['', ''];
+}
+function momSigClass(s) {
+  if (!s) return '';
+  const u = s.toUpperCase();
+  if (u.includes('EMA') || u.includes('PX>'))   return 'sig-macd';
+  if (u.includes('RSI'))                         return 'sig-rsi';
+  if (u.includes('HIGHER') || u.includes('5D'))  return 'sig-fv';
+  if (u.includes('ACCUMULATION'))                return 'sig-bb';
+  if (u.includes('20D'))                         return 'sig-sup';
+  return '';
+}
+
 function renderDipCard(t) {
   const narr = t.narrative_th || {};
   const headline = narr.headline || `Dip Score ${t.dip_score||0} · signals from price action`;
   const sigChips = (t.dip_signals || []).map(s => `<span class="sig ${sigClass(s)}">${sigLabel(s)}</span>`).join('');
+  const momChips = (t.momentum_signals || []).map(s => `<span class="sig ${momSigClass(s)}">${esc(s)}</span>`).join('');
+  const mom = (t.momentum_score != null) ? t.momentum_score : 0;
+  const [rotLabel, rotNote] = rotMeta(t.rotation_flag || '');
+  const rotHtml = rotLabel ? `<span class="rot-flag ${t.rotation_flag}">${rotLabel}</span>` : '';
   return `
   <div class="dip-card">
     <div class="dip-row">
@@ -445,10 +498,15 @@ function renderDipCard(t) {
         <div class="n">${t.dip_score||0}</div>
         <div class="l">DIP SCORE</div>
       </div>
+      <div class="mom-score ${momCls(mom)}">
+        <div class="n">${mom}</div>
+        <div class="d">/35</div>
+        <div class="l">MOMENTUM</div>
+      </div>
       <div class="dip-head">
-        <div class="h">${esc(headline)}</div>
-        <div class="p">Composite 0-100 from pullback depth, RSI, MACD, volume surge, 52w position${t.val ? ', fair value, moat' : ''}</div>
-        <div class="dip-signals">${sigChips}</div>
+        <div class="h">${esc(headline)}${rotHtml}</div>
+        <div class="p">Dip (0-100) = ดีลลึกแค่ไหน · Momentum (0-35) = เริ่มกลับขึ้นแค่ไหน${rotNote ? ' · <em>'+esc(rotNote)+'</em>' : ''}</div>
+        <div class="dip-signals">${sigChips}${momChips ? ' <span style="opacity:0.4">|</span> '+momChips : ''}</div>
       </div>
     </div>
   </div>`;
