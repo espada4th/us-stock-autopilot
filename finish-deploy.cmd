@@ -21,9 +21,23 @@ git add -A
 echo [5/6] Creating commit...
 git commit -m "refresh: sanitize refresh_data.py + redeploy dashboard" || echo (nothing to commit, continuing)
 
-echo [6/6] Pushing to origin/main...
+echo [6/8] Fetching + rebasing on origin/main (pick up any GitHub Actions commits)...
+git fetch origin main
+git pull --rebase origin main
+if errorlevel 1 (
+  echo.
+  echo REBASE HIT A CONFLICT. Run these manually:
+  echo   git status
+  echo   git rebase --abort   ^(to bail out^)
+  echo   or resolve, then: git rebase --continue
+  pause
+  exit /b 1
+)
+
+echo [7/8] Pushing to origin/main...
 git push origin main
 
-echo.
-echo Done. Check https://github.com/espada4th for the refresh workflow run.
+echo [8/8] Done.
+echo View: https://espada4th.github.io/us-stock-autopilot/
+echo Actions: https://github.com/espada4th/us-stock-autopilot/actions
 pause
