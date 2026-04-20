@@ -49,6 +49,56 @@ FINNHUB_INSIDER_LOOKBACK_DAYS = 30
 FINNHUB_REQ_TIMEOUT = 8
 FINNHUB_CALL_SLEEP = 0.12   # ~500 calls/min theoretical; we stay well under 60/min/endpoint
 
+# Translation (EN -> TH) for news headlines/summaries. Uses deep-translator
+# (free, scrapes Google Translate). Falls back to English on any error.
+# Set TRANSLATE_NEWS=0 to disable even if lib is installed.
+TRANSLATE_NEWS = os.environ.get("TRANSLATE_NEWS", "1").strip() != "0"
+_TRANSLATE_CACHE = {}            # {original_text: thai_text} in-memory per run
+_TRANSLATE_FAILURES = [0]        # mutable counter; stop translation after too many errors
+_TRANSLATE_MAX_FAILURES = 5      # after N consecutive failures, skip rest of run
+_GoogleTranslator = None         # lazily imported
+
+
+def _translate_th(text, max_chars=4500):
+    """Translate English -> Thai via deep-translator (Google Translate).
+    Returns original text on any failure. Caches results in-memory within one run.
+    Same headline across multiple tickers is translated only once."""
+    if not TRANSLATE_NEWS:
+        return text
+    if not text or not isinstance(text, str):
+        return text
+    t = text.strip()
+    if not t:
+        return text
+    if t in _TRANSLATE_CACHE:
+        return _TRANSLATE_CACHE[t]
+    if _TRANSLATE_FAILURES[0] >= _TRANSLATE_MAX_FAILURES:
+        return text
+    global _GoogleTranslator
+    if _GoogleTranslator is None:
+        try:
+            from deep_translator import GoogleTranslator as _GT
+            _GoogleTranslator = _GT
+        except Exception as e:
+            print(f"[translate] deep-translator not available ({e}); news stays in English")
+            _TRANSLATE_FAILURES[0] = _TRANSLATE_MAX_FAILURES
+            return text
+    src = t[:max_chars]
+    try:
+        result = _GoogleTranslator(source="auto", target="th").translate(src)
+        if result and isinstance(result, str) and result.strip():
+            _TRANSLATE_CACHE[t] = result
+            _TRANSLATE_FAILURES[0] = 0
+            return result
+        _TRANSLATE_FAILURES[0] += 1
+        return text
+    except Exception as e:
+        _TRANSLATE_FAILURES[0] += 1
+        if _TRANSLATE_FAILURES[0] == 1 or _TRANSLATE_FAILURES[0] == _TRANSLATE_MAX_FAILURES:
+            print(f"[translate] failure {_TRANSLATE_FAILURES[0]}/{_TRANSLATE_MAX_FAILURES}: {e}")
+        return text
+
+
 
 # -------------------- universe + overlay loading --------------------
 
@@ -537,12 +587,18 @@ def fetch_finnhub_bundle(sym):
             hl = (it.get("headline") or "").strip()
             if not hl:
                 continue
+            summary_en = (it.get("summary") or "")[:240]
+            # Translate to Thai (cached in-memory, falls back to English on error)
+            hl_th = _translate_th(hl)
+            sum_th = _translate_th(summary_en) if summary_en else ""
             news.append({
                 "headline": hl,
+                "headline_th": hl_th if hl_th and hl_th != hl else "",
                 "url": it.get("url"),
                 "source": it.get("source"),
                 "datetime": it.get("datetime"),
-                "summary": (it.get("summary") or "")[:240],
+                "summary": summary_en,
+                "summary_th": sum_th if sum_th and sum_th != summary_en else "",
                 "image": it.get("image") or "",
             })
         if news:
