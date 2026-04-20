@@ -22,6 +22,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 10        # scanner over 1500 tickers finishes in 3-5 min typically
     steps:
       - uses: actions/checkout@v5
 
@@ -32,21 +33,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dateutil yfinance pandas
+          # pandas+lxml+bs4 for Wikipedia scrape; yfinance for OHLC; requests everywhere
+          pip install requests python-dateutil yfinance pandas lxml beautifulsoup4
 
-      - name: Refresh dataset.json
+      - name: Run scanner (refresh dataset.json + auto-build universe if needed)
         env:
+          # Kept for historical fallbacks; scanner no longer requires them.
           BIGDATA_API_KEY: ${{ secrets.BIGDATA_API_KEY }}
-          # Optional: FMP_API_KEY as fallback source
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: python scripts/refresh_data.py
+
+      - name: Regenerate ticker/SYM.html pages for top-N
+        run: python scripts/gen_ticker_pages.py
 
       - name: Commit if changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -n "$(git status --porcelain dataset.json)" ]; then
-            git add dataset.json
+          git add dataset.json universe.json ticker/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
             git commit -m "refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
             # Retry push up to 3 times with rebase, in case origin/main moved
             # while we were running (e.g. another commit landed).
@@ -55,6 +62,4 @@ jobs:
               echo "push attempt $i failed, retrying in 5s..."
               sleep 5
             done
-          else
-            echo "No changes to dataset.json"
           fi
