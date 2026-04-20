@@ -21,12 +21,16 @@ import sys
 import time
 import datetime as dt
 import subprocess
+import urllib.request
+import urllib.parse
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATASET      = ROOT / "dataset.json"
 UNIVERSE     = ROOT / "universe.json"
 OVERLAY      = ROOT / "narratives_manual.json"
+WATCHLIST    = ROOT / "watchlist.json"
 BUILD_UNIV   = ROOT / "scripts" / "build_universe.py"
 
 HISTORY_CAP  = 180      # days of sparkline history to keep per ticker
@@ -35,6 +39,15 @@ UNIVERSE_MAX_AGE_DAYS = 30
 
 # Chunk size for yfinance batch download. Yahoo handles ~200 tickers per call well.
 CHUNK_SIZE   = 200
+
+# Finnhub API (optional). If FINNHUB_API_KEY env var is set, top-N tickers get
+# enriched with real-time quote + news + fundamentals + insider transactions.
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "").strip()
+FINNHUB_BASE    = "https://finnhub.io/api/v1"
+FINNHUB_NEWS_LOOKBACK_DAYS = 7
+FINNHUB_INSIDER_LOOKBACK_DAYS = 30
+FINNHUB_REQ_TIMEOUT = 8
+FINNHUB_CALL_SLEEP = 0.12   # ~500 calls/min theoretical; we stay well under 60/min/endpoint
 
 
 # -------------------- universe + overlay loading --------------------
@@ -67,6 +80,21 @@ def load_overlay():
     with OVERLAY.open(encoding="utf-8") as f:
         d = json.load(f)
     return d.get("tickers", {})
+
+
+def load_watchlist():
+    """Force-include symbols that may not be in index universe (e.g. small caps,
+    emerging themes). Each entry: {symbol, name, sector, industry?, notes?}.
+    Returns [] if watchlist.json missing."""
+    if not WATCHLIST.exists():
+        return []
+    try:
+        with WATCHLIST.open(encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get("tickers", [])
+    except Exception as e:
+        print(f"WARN: failed to load watchlist: {e}")
+        return []
 
 
 # -------------------- indicator math --------------------
@@ -293,6 +321,159 @@ def compute_dip_score(t):
     return int(round(pts)), signals[:6]
 
 
+def star_from_dip(score):
+    """Auto-derive star rating (1-5) from dip_score when no manual overlay exists.
+    Calibration: mirror how the hand-curated overlays distribute ratings."""
+    if score is None:
+        return 1
+    if score >= 80: return 5
+    if score >= 65: return 4
+    if score >= 50: return 3
+    if score >= 35: return 2
+    return 1
+
+
+# -------------------- Finnhub API (optional) --------------------
+
+def _finnhub_get(path, params):
+    """GET https://finnhub.io/api/v1{path}?...&token=KEY; return parsed JSON or None."""
+    if not FINNHUB_API_KEY:
+        return None
+    p = dict(params or {})
+    p["token"] = FINNHUB_API_KEY
+    qs = urllib.parse.urlencode(p)
+    url = f"{FINNHUB_BASE}{path}?{qs}"
+    req = urllib.request.Request(url, headers={"User-Agent": "stock-autopilot/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=FINNHUB_REQ_TIMEOUT) as r:
+            raw = r.read()
+        return json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            # rate limited - back off 1s and retry once
+            time.sleep(1.0)
+            try:
+                with urllib.request.urlopen(req, timeout=FINNHUB_REQ_TIMEOUT) as r:
+                    raw = r.read()
+                return json.loads(raw.decode("utf-8"))
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+    finally:
+        time.sleep(FINNHUB_CALL_SLEEP)
+
+
+def fetch_finnhub_bundle(sym):
+    """Gather quote + news + fundamentals + insider + analyst recs for one symbol.
+    Returns dict of available fields (missing endpoints silently dropped)."""
+    out = {}
+    today = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).date()
+    to_d = today.strftime("%Y-%m-%d")
+
+    # 1) Real-time quote
+    q = _finnhub_get("/quote", {"symbol": sym})
+    if q and q.get("c"):
+        pc = q.get("pc") or 0
+        c = q.get("c") or 0
+        out["quote_rt"] = {
+            "price": _round(c, 2),
+            "high":  _round(q.get("h"), 2),
+            "low":   _round(q.get("l"), 2),
+            "open":  _round(q.get("o"), 2),
+            "prev_close": _round(pc, 2),
+            "change_pct": _round(100 * (c - pc) / pc, 2) if pc else None,
+            "ts": q.get("t"),
+        }
+
+    # 2) News (last 7 days)
+    since_n = (today - dt.timedelta(days=FINNHUB_NEWS_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    n = _finnhub_get("/company-news", {"symbol": sym, "from": since_n, "to": to_d})
+    if isinstance(n, list):
+        news = []
+        for it in n[:5]:
+            hl = (it.get("headline") or "").strip()
+            if not hl:
+                continue
+            news.append({
+                "headline": hl,
+                "url": it.get("url"),
+                "source": it.get("source"),
+                "datetime": it.get("datetime"),
+                "summary": (it.get("summary") or "")[:240],
+                "image": it.get("image") or "",
+            })
+        if news:
+            out["news"] = news
+
+    # 3) Fundamentals (snapshot metrics)
+    m = _finnhub_get("/stock/metric", {"symbol": sym, "metric": "all"})
+    if m and isinstance(m, dict) and m.get("metric"):
+        mm = m["metric"]
+        def _g(*keys):
+            for k in keys:
+                v = mm.get(k)
+                if v is not None:
+                    try:
+                        return _round(float(v), 2)
+                    except Exception:
+                        return None
+            return None
+        out["fund_rt"] = {
+            "pe_ttm":        _g("peTTM", "peBasicExclExtraTTM", "peNormalizedAnnual"),
+            "pe_forward":    _g("forwardPE"),
+            "eps_ttm":       _g("epsBasicExclExtraItemsTTM", "epsTTM"),
+            "rev_growth_yoy_pct": _g("revenueGrowthTTMYoy", "revenueGrowthQuarterlyYoy"),
+            "profit_margin_pct":  _g("netProfitMarginTTM"),
+            "roe_ttm_pct":        _g("roeTTM"),
+            "debt_to_equity":     _g("totalDebt/totalEquityQuarterly"),
+            "dividend_yield_pct": _g("dividendYieldIndicatedAnnual"),
+            "52w_high":      _g("52WeekHigh"),
+            "52w_low":       _g("52WeekLow"),
+            "beta":          _g("beta"),
+        }
+
+    # 4) Insider transactions (last 30 days)
+    since_i = (today - dt.timedelta(days=FINNHUB_INSIDER_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    ins = _finnhub_get("/stock/insider-transactions",
+                       {"symbol": sym, "from": since_i, "to": to_d})
+    if ins and isinstance(ins, dict) and ins.get("data"):
+        rows = ins["data"][:15]
+        buys = sum(1 for r in rows if (r.get("change") or 0) > 0)
+        sells = sum(1 for r in rows if (r.get("change") or 0) < 0)
+        net = sum((r.get("change") or 0) for r in rows)
+        out["insider"] = {
+            "window_days": FINNHUB_INSIDER_LOOKBACK_DAYS,
+            "count": len(rows),
+            "buys": buys,
+            "sells": sells,
+            "net_shares": int(net),
+            "top": [{
+                "name": r.get("name"),
+                "share_change": r.get("change"),
+                "date": r.get("transactionDate"),
+                "code": r.get("transactionCode"),
+                "price": r.get("transactionPrice"),
+            } for r in rows[:5]],
+        }
+
+    # 5) Analyst recommendations (latest month)
+    rec = _finnhub_get("/stock/recommendation", {"symbol": sym})
+    if isinstance(rec, list) and rec:
+        latest = rec[0]
+        out["analyst_rec"] = {
+            "period": latest.get("period"),
+            "strong_buy": latest.get("strongBuy"),
+            "buy":         latest.get("buy"),
+            "hold":        latest.get("hold"),
+            "sell":        latest.get("sell"),
+            "strong_sell": latest.get("strongSell"),
+        }
+
+    return out if out else None
+
+
 def make_entry_zone(t):
     """Heuristic entry/stop/target from price + support/resistance + ATR."""
     price = t.get("price")
@@ -408,14 +589,45 @@ def fetch_universe_history(symbols):
 
 
 def main():
-    now = dt.datetime.utcnow()
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     print(f"--- Scanner refresh @ {now.isoformat()}Z ---")
 
-    universe = load_universe()
-    overlay  = load_overlay()
+    universe  = load_universe()
+    watchlist = load_watchlist()
+    overlay   = load_overlay()
+
+    # Merge watchlist: force-include symbols not already in index universe.
+    existing_syms = {u.get("symbol") for u in universe}
+    added_watch = 0
+    for w in watchlist:
+        s = (w.get("symbol") or "").strip().upper()
+        if not s:
+            continue
+        if s in existing_syms:
+            # Already in index; just tag so meta knows it's pinned
+            for u in universe:
+                if u.get("symbol") == s:
+                    u["on_watchlist"] = True
+                    u["watchlist_notes"] = w.get("notes")
+                    break
+        else:
+            universe.append({
+                "symbol":   s,
+                "name":     w.get("name") or s,
+                "sector":   w.get("sector") or "Unknown",
+                "industry": w.get("industry"),
+                "source":   "watchlist",
+                "on_watchlist":   True,
+                "watchlist_notes": w.get("notes"),
+            })
+            existing_syms.add(s)
+            added_watch += 1
+
     syms = [u["symbol"] for u in universe]
     meta_by_sym = {u["symbol"]: u for u in universe}
-    print(f"Universe: {len(syms)} tickers. Overlay (manual): {len(overlay)} tickers.")
+    print(f"Universe: {len(syms)} tickers "
+          f"(index {len(syms) - added_watch} + watchlist +{added_watch}). "
+          f"Overlay (manual): {len(overlay)} tickers.")
 
     histories = fetch_universe_history(syms)
     print(f"Computing indicators for {len(histories)} tickers...")
@@ -432,19 +644,30 @@ def main():
             "symbol": sym,
             "name": ov.get("name") or meta.get("name") or sym,
             "sector": ov.get("sector") or meta.get("sector") or "Unknown",
-            "industry": ov.get("industry"),
+            "industry": ov.get("industry") or meta.get("industry"),
             "market_cap_b": ov.get("market_cap_b"),
             "logo_color": ov.get("logo_color") or "#888",
             # Overlay hand-curated deep fields (may be None for new entrants)
             "val":      ov.get("val"),
             "fund":     ov.get("fund"),
             "catalyst": ov.get("catalyst"),
+            "on_watchlist": bool(meta.get("on_watchlist")),
         }
         t.update(tech_pack)   # price, tech, change_*, 52w, history
         score, signals = compute_dip_score(t)
         t["dip_score"] = score
         t["dip_signals"] = signals
         t["entry"] = make_entry_zone(t)
+
+        # Star rating: manual overlay wins; else auto-derive from dip_score so
+        # every top-N ticker has stars (not just hand-curated ones).
+        val_existing = dict(t.get("val") or {})
+        if val_existing.get("star_rating") is None:
+            val_existing["star_rating"]   = star_from_dip(score)
+            val_existing["rating_source"] = "auto_dip"
+        else:
+            val_existing.setdefault("rating_source", "manual")
+        t["val"] = val_existing
 
         # Narrative: overlay wins if present
         if ov.get("narrative_th"):
@@ -466,7 +689,51 @@ def main():
 
     candidates.sort(key=lambda x: x.get("dip_score", 0), reverse=True)
     top = candidates[:TOP_N]
-    print(f"Top {TOP_N} dip scores: " + ", ".join(f"{t['symbol']}={t['dip_score']}" for t in top[:10]) + " ...")
+
+    # Force-include watchlist symbols even if outside top-N (append, keep sort).
+    top_syms = {t["symbol"] for t in top}
+    forced = [c for c in candidates if c.get("on_watchlist") and c["symbol"] not in top_syms]
+    if forced:
+        print(f"Force-including {len(forced)} watchlist symbols "
+              f"({', '.join(c['symbol'] for c in forced)}) below top-{TOP_N}")
+        top.extend(forced)
+
+    print(f"Top dip scores: " + ", ".join(f"{t['symbol']}={t['dip_score']}" for t in top[:10]) + " ...")
+
+    # ---- Optional Finnhub enrichment (news + insider + quote + fundamentals) ----
+    if FINNHUB_API_KEY:
+        print(f"Finnhub: enriching {len(top)} tickers (this takes ~{len(top)*5//10}s at ~2-3 calls/sec)...")
+        enriched = 0
+        for t in top:
+            bundle = fetch_finnhub_bundle(t["symbol"])
+            if not bundle:
+                continue
+            # Real-time quote: only override if yfinance missed or is stale (weekend)
+            q_rt = bundle.get("quote_rt")
+            if q_rt and q_rt.get("price"):
+                t["quote_rt"] = q_rt
+            if bundle.get("news"):
+                t["news"] = bundle["news"]
+            if bundle.get("insider"):
+                t["insider"] = bundle["insider"]
+            if bundle.get("analyst_rec"):
+                t["analyst_rec"] = bundle["analyst_rec"]
+            # Fundamentals: merge into fund if manual overlay missing fields
+            f_rt = bundle.get("fund_rt")
+            if f_rt:
+                fund_merged = dict(t.get("fund") or {})
+                for k, v in f_rt.items():
+                    if v is not None and fund_merged.get(k) is None:
+                        fund_merged[k] = v
+                t["fund"] = fund_merged
+                t.setdefault("fund_rt", f_rt)
+                # Also push analyst target to val if finnhub has it
+                if f_rt.get("pe_forward") and t["val"].get("pe_forward") is None:
+                    t["val"]["pe_forward"] = f_rt["pe_forward"]
+            enriched += 1
+        print(f"Finnhub: enriched {enriched}/{len(top)} tickers with news/insider/fundamentals")
+    else:
+        print("Finnhub: skipped (no API key). Set FINNHUB_API_KEY env var to enable.")
 
     # Summary
     scores = [t["dip_score"] for t in top]
@@ -482,6 +749,8 @@ def main():
             and abs(t["price"] - t["tech"]["support"]) / t["price"] < 0.03
         ),
         "scanner_universe_size": len(syms),
+        "watchlist_count":       added_watch,
+        "finnhub_enabled":       bool(FINNHUB_API_KEY),
     }
     discs = [t.get("val", {}).get("discount_to_fv_pct") for t in top if t.get("val")]
     discs = [d for d in discs if d is not None]

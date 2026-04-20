@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "description": "Symbols force-included in the scanner universe, even if not in S&P 1500 / NASDAQ-100. Edit this file to pin tickers you always want scanned (e.g. small-caps, emerging themes).",
+  "tickers": [
+    {
+      "symbol": "ASTS",
+      "name": "AST SpaceMobile",
+      "sector": "Communication Services",
+      "industry": "Telecom / Satellite",
+      "notes": "Direct-to-device satellite broadband; speculative growth"
+    }
+  ]
+}

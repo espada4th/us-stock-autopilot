@@ -38,9 +38,14 @@ jobs:
 
       - name: Run scanner (refresh dataset.json + auto-build universe if needed)
         env:
+          # Optional: if FINNHUB_API_KEY is set in repo secrets, scanner enriches
+          # top-N tickers with real-time quote + news + fundamentals + insider
+          # transactions. Without it the scanner still runs (yfinance-only mode).
+          # Setup guide: docs/finnhub-setup.md
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           # Kept for historical fallbacks; scanner no longer requires them.
           BIGDATA_API_KEY: ${{ secrets.BIGDATA_API_KEY }}
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FMP_API_KEY:     ${{ secrets.FMP_API_KEY }}
         run: python scripts/refresh_data.py
 
       - name: Regenerate ticker/SYM.html pages for top-N
