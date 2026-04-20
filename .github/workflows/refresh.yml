@@ -44,7 +44,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 10        # scanner over 1500 tickers finishes in 3-5 min typically
+    timeout-minutes: 20        # 10 min was hitting yfinance slow days + translation overhead
     steps:
       - uses: actions/checkout@v5
 
