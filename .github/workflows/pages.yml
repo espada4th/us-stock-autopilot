@@ -3,6 +3,12 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+  # Auto-deploy after the hourly Refresh workflow finishes.
+  # (Refresh's bot-push won't trigger `on: push` because it uses GITHUB_TOKEN,
+  # so we hook into workflow_run instead.)
+  workflow_run:
+    workflows: ["Refresh dashboard data"]
+    types: [completed]
   workflow_dispatch: {}
 
 permissions:
