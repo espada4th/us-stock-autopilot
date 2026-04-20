@@ -38,9 +38,38 @@
     transition:all 0.15s;
   }
   .back:hover { color:var(--text); border-color:#334559; }
-  .crumb { color:var(--muted); font-size:12px; margin-left:auto; }
-  .crumb .asof { color:var(--text); }
+  .crumb { color:var(--muted); font-size:12px; margin-left:auto; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .crumb .asof { color:var(--text); font-family:'JetBrains Mono',monospace; }
+  .crumb .ago { font-size:11px; padding:2px 8px; border-radius:10px; background:var(--panel); border:1px solid var(--line); }
+  .crumb .ago.fresh { color:var(--green); border-color:rgba(34,211,160,0.35); }
+  .crumb .ago.stale { color:var(--yellow); border-color:rgba(245,196,81,0.35); }
   .crumb .dot { width:6px; height:6px; border-radius:50%; background:var(--green); display:inline-block; margin-right:6px; vertical-align:middle; }
+
+  /* Price chart */
+  .chart-card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px 22px; margin-bottom:22px; }
+  .chart-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:8px; }
+  .chart-head .t { font-size:13px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:0.05em; display:flex; align-items:center; gap:8px; }
+  .chart-head .t::before { content:''; width:3px; height:14px; background:var(--blue); border-radius:1px; }
+  .chart-legend { display:flex; gap:14px; font-size:11px; color:var(--muted); }
+  .chart-legend span::before { content:''; display:inline-block; width:10px; height:2px; vertical-align:middle; margin-right:5px; }
+  .chart-legend .l-px::before { background:var(--blue); height:2px; }
+  .chart-legend .l-sup::before { background:var(--yellow); border-top:1.5px dashed var(--yellow); height:0; }
+  .chart-legend .l-res::before { background:var(--red); border-top:1.5px dashed var(--red); height:0; }
+  .chart-legend .l-fv::before { background:var(--purple); border-top:1.5px dashed var(--purple); height:0; }
+  .chart-legend .l-entry::before { background:rgba(34,211,160,0.35); height:8px; }
+  .price-chart { width:100%; height:280px; display:block; }
+  .price-chart .grid line { stroke:var(--line); stroke-width:1; }
+  .price-chart .axis text { fill:var(--muted); font-size:10px; font-family:'JetBrains Mono',monospace; }
+  .price-chart .area { fill:rgba(91,155,255,0.10); stroke:none; }
+  .price-chart .line { fill:none; stroke:var(--blue); stroke-width:1.6; }
+  .price-chart .sup-line { stroke:var(--yellow); stroke-width:1.2; stroke-dasharray:4 3; fill:none; }
+  .price-chart .res-line { stroke:var(--red); stroke-width:1.2; stroke-dasharray:4 3; fill:none; }
+  .price-chart .fv-line { stroke:var(--purple); stroke-width:1.2; stroke-dasharray:4 3; fill:none; }
+  .price-chart .entry-band { fill:rgba(34,211,160,0.12); stroke:none; }
+  .price-chart .label { fill:var(--text); font-size:10px; font-family:'JetBrains Mono',monospace; }
+  .price-chart .label.sup { fill:var(--yellow); }
+  .price-chart .label.res { fill:var(--red); }
+  .price-chart .label.fv { fill:var(--purple); }
 
   .wrap { max-width:1200px; margin:0 auto; padding:24px; }
 
@@ -195,7 +224,10 @@
 <header>
   <div class="header-row">
     <a href="../index.html" class="back">← Back to scanner</a>
-    <div class="crumb"><span class="dot"></span>As of <span class="asof" id="asof">—</span></div>
+    <div class="crumb">
+      <span><span class="dot"></span>As of <span class="asof" id="asof">—</span></span>
+      <span id="ago" class="ago">—</span>
+    </div>
   </div>
 </header>
 
@@ -240,9 +272,102 @@ function sigLabel(s) {
   return map[s] || s.replace(/_/g,' ').toUpperCase();
 }
 
-function render(t, asof) {
+function relativeTime(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + ' min ago';
+  if (s < 86400) return Math.floor(s/3600) + ' hr ago';
+  return Math.floor(s/86400) + ' day' + (Math.floor(s/86400)===1?'':'s') + ' ago';
+}
+
+function updateAgo(iso) {
+  const el = document.getElementById('ago');
+  if (!el || !iso) return;
+  const s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
+  el.textContent = relativeTime(iso);
+  el.className = 'ago ' + (s < 3600 ? 'fresh' : s < 86400 ? '' : 'stale');
+}
+
+function buildChart(t) {
+  const hist = t.history;
+  if (!hist || !hist.closes || hist.closes.length < 2) return '<div style="padding:40px; text-align:center; color:var(--muted);">No price history available</div>';
+  const closes = hist.closes, dates = hist.dates || [];
+  const W = 1040, H = 260, padL = 42, padR = 12, padT = 14, padB = 28;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+
+  // y-range: include closes, support, resistance, fv, entry zone
+  const extras = [t.tech.support, t.tech.resistance, t.val.fair_value, t.entry.entry_low, t.entry.entry_high, t.entry.stop_loss].filter(x => x != null);
+  const lo = Math.min(...closes, ...extras);
+  const hi = Math.max(...closes, ...extras);
+  const rng = (hi - lo) || 1;
+  const pad = rng * 0.06;
+  const yLo = lo - pad, yHi = hi + pad;
+  const yRng = yHi - yLo;
+
+  const x = i => padL + (i / (closes.length - 1)) * innerW;
+  const y = v => padT + (1 - (v - yLo) / yRng) * innerH;
+
+  // Build line + area path
+  const linePath = 'M' + closes.map((c, i) => `${x(i).toFixed(1)},${y(c).toFixed(1)}`).join('L');
+  const areaPath = linePath + `L${x(closes.length-1).toFixed(1)},${padT + innerH} L${x(0).toFixed(1)},${padT + innerH} Z`;
+
+  // Y-axis labels (5 ticks)
+  const yTicks = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = yLo + (yRng / 4) * i;
+    yTicks.push({ v, y: y(v) });
+  }
+  // X-axis labels (every ~30 days)
+  const xTicks = [];
+  const step = Math.max(1, Math.floor(closes.length / 5));
+  for (let i = 0; i < closes.length; i += step) {
+    xTicks.push({ i, label: dates[i] ? dates[i].slice(5) : '' });
+  }
+  if (xTicks[xTicks.length-1].i !== closes.length - 1) {
+    xTicks.push({ i: closes.length - 1, label: dates[closes.length - 1] ? dates[closes.length - 1].slice(5) : '' });
+  }
+
+  // Entry zone band (horizontal band from entry_low to entry_high)
+  const entryBand = t.entry.entry_low && t.entry.entry_high
+    ? `<rect class="entry-band" x="${padL}" y="${y(t.entry.entry_high)}" width="${innerW}" height="${y(t.entry.entry_low) - y(t.entry.entry_high)}"/>`
+    : '';
+
+  // Horizontal ref lines
+  const supLine = t.tech.support ? `<line class="sup-line" x1="${padL}" x2="${padL+innerW}" y1="${y(t.tech.support)}" y2="${y(t.tech.support)}"/>
+    <text class="label sup" x="${padL+innerW-4}" y="${y(t.tech.support)-4}" text-anchor="end">SUP $${t.tech.support.toFixed(2)}</text>` : '';
+  const resLine = t.tech.resistance ? `<line class="res-line" x1="${padL}" x2="${padL+innerW}" y1="${y(t.tech.resistance)}" y2="${y(t.tech.resistance)}"/>
+    <text class="label res" x="${padL+innerW-4}" y="${y(t.tech.resistance)-4}" text-anchor="end">RES $${t.tech.resistance.toFixed(2)}</text>` : '';
+  const fvLine = t.val.fair_value ? `<line class="fv-line" x1="${padL}" x2="${padL+innerW}" y1="${y(t.val.fair_value)}" y2="${y(t.val.fair_value)}"/>
+    <text class="label fv" x="${padL+innerW-4}" y="${y(t.val.fair_value)-4}" text-anchor="end">FV $${t.val.fair_value.toFixed(2)}</text>` : '';
+
+  return `
+  <svg class="price-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <g class="grid">
+      ${yTicks.map(tk => `<line x1="${padL}" x2="${padL+innerW}" y1="${tk.y.toFixed(1)}" y2="${tk.y.toFixed(1)}"/>`).join('')}
+    </g>
+    ${entryBand}
+    <path class="area" d="${areaPath}"/>
+    <path class="line" d="${linePath}"/>
+    ${supLine}
+    ${resLine}
+    ${fvLine}
+    <g class="axis">
+      ${yTicks.map(tk => `<text x="${padL-6}" y="${tk.y.toFixed(1)+3}" text-anchor="end">$${tk.v.toFixed(0)}</text>`).join('')}
+      ${xTicks.map(tk => `<text x="${x(tk.i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${tk.label}</text>`).join('')}
+    </g>
+  </svg>`;
+}
+
+function render(t, asof, generatedAt) {
   document.getElementById('asof').textContent = asof || '—';
   document.getElementById('pt').textContent = `${t.symbol} · ${t.name} · Buy-the-Dip`;
+  if (generatedAt) {
+    updateAgo(generatedAt);
+    setInterval(() => updateAgo(generatedAt), 30000);
+  }
 
   const rangePos = Math.max(0, Math.min(100, t.pos_52w_pct));
   const emaStatus = { above_both:'Above EMA20/50', between:'Between EMA20/50', below_both:'Below EMA20/50' }[t.tech.ema_status] || t.tech.ema_status;
@@ -317,113 +442,24 @@ function render(t, asof) {
     </div>
   </div>
 
+  <div class="chart-card">
+    <div class="chart-head">
+      <div class="t">Price Chart · 90 Days</div>
+      <div class="chart-legend">
+        <span class="l-px">Close</span>
+        <span class="l-entry">Entry zone</span>
+        <span class="l-sup">Support</span>
+        <span class="l-res">Resistance</span>
+        <span class="l-fv">Fair Value</span>
+      </div>
+    </div>
+    ${buildChart(t)}
+  </div>
+
   <div class="grid2">
     <div class="card">
       <h2 class="val">Valuation (Morningstar-style)</h2>
       <div class="val-top">
         <div class="val-big">
           <div class="l">Fair Value</div>
-          <div class="v pos">${fmtUSD(t.val.fair_value)}</div>
-          <div class="sub">Discount ${fmtPct(t.val.discount_to_fv_pct)}</div>
-        </div>
-        <div class="val-big">
-          <div class="l">Star Rating</div>
-          <div class="v">${stars(t.val.star_rating)}</div>
-          <div class="sub">${t.val.star_rating}/5 stars</div>
-        </div>
-      </div>
-      <div class="mrow"><span class="k">Economic Moat</span><span class="v thai ${moatCls(t.val.moat)}">${t.val.moat}</span></div>
-      <div class="mrow"><span class="k">Uncertainty Rating</span><span class="v thai">${t.val.uncertainty}</span></div>
-      <div class="mrow"><span class="k">Financial Health</span><span class="v thai ${fhCls(t.val.financial_health)}">${t.val.financial_health}</span></div>
-      <div class="mrow"><span class="k">Analyst Consensus</span><span class="v thai">${t.val.analyst_consensus}</span></div>
-      <div class="mrow"><span class="k">Analyst Target Mean</span><span class="v">${fmtUSD(t.val.analyst_target_mean)} <span class="pos">(${fmtPct(t.val.analyst_upside_pct)})</span></span></div>
-      <div class="mrow"><span class="k">Target Range</span><span class="v">${fmtUSD(t.val.analyst_target_low)} – ${fmtUSD(t.val.analyst_target_high)}</span></div>
-    </div>
-
-    <div class="card">
-      <h2 class="tech">Technical Readings</h2>
-      <div class="mrow"><span class="k">Trend (3M)</span><span class="v thai">${trendLabel}</span></div>
-      <div class="mrow"><span class="k">RSI (14)</span><span class="v">${fmtNum(t.tech.rsi_14,1)} ${t.tech.rsi_14 < 30 ? '· oversold' : t.tech.rsi_14 > 70 ? '· overbought' : ''}</span></div>
-      <div class="mrow"><span class="k">MACD Signal</span><span class="v thai">${t.tech.macd_signal.replace('_',' ')}</span></div>
-      <div class="mrow"><span class="k">EMA 20 / 50</span><span class="v">${fmtUSD(t.tech.ema_20,2)} / ${fmtUSD(t.tech.ema_50,2)}</span></div>
-      <div class="mrow"><span class="k">EMA Status</span><span class="v thai">${emaStatus}</span></div>
-      <div class="mrow"><span class="k">Bollinger Bands</span><span class="v">${fmtUSD(t.tech.bb_lower)} – ${fmtUSD(t.tech.bb_upper)}</span></div>
-      <div class="mrow"><span class="k">BB Status</span><span class="v thai">${bbStatus}</span></div>
-      <div class="mrow"><span class="k">5D Avg Price</span><span class="v">${fmtUSD(t.tech.avg_5d_price)}</span></div>
-      <div class="mrow"><span class="k">ATR(14) · Vol 5D</span><span class="v">${fmtNum(t.tech.atr_14,2)} · ${fmtNum(t.tech.vol_5d_pct,2)}%</span></div>
-      <div class="mrow"><span class="k">Support / Resistance</span><span class="v">${fmtUSD(t.tech.support)} / ${fmtUSD(t.tech.resistance)}</span></div>
-      <div class="mrow"><span class="k">52W Range Position</span><span class="v">
-        <div class="range"><div class="fill" style="width:${rangePos}%"></div><div class="mark" style="left:calc(${rangePos}% - 1.5px)"></div></div>
-        <div class="range-labels"><span>${fmtUSD(t.low_52w)}</span><span>${rangePos}%</span><span>${fmtUSD(t.high_52w)}</span></div>
-      </span></div>
-    </div>
-
-    <div class="card">
-      <h2 class="fund">Fundamentals</h2>
-      <div class="mrow"><span class="k">P/E (TTM / Fwd)</span><span class="v">${fmtNum(t.fund.pe_ttm,1)} / ${fmtNum(t.fund.pe_forward,1)}</span></div>
-      <div class="mrow"><span class="k">PEG (Fwd)</span><span class="v">${fmtNum(t.fund.peg_forward,2)}</span></div>
-      <div class="mrow"><span class="k">EV / EBITDA</span><span class="v">${fmtNum(t.fund.ev_ebitda,1)}</span></div>
-      <div class="mrow"><span class="k">Revenue Growth (YoY)</span><span class="v ${pctCls(t.fund.rev_growth_yoy_pct)}">${fmtPct(t.fund.rev_growth_yoy_pct)}</span></div>
-      <div class="mrow"><span class="k">EPS Growth (YoY)</span><span class="v ${pctCls(t.fund.eps_growth_yoy_pct)}">${fmtPct(t.fund.eps_growth_yoy_pct)}</span></div>
-      <div class="mrow"><span class="k">FCF Yield</span><span class="v">${fmtPct(t.fund.fcf_yield_pct,2)}</span></div>
-      <div class="mrow"><span class="k">Gross / Net Margin</span><span class="v">${fmtPct(t.fund.gross_margin_pct,1)} / ${fmtPct(t.fund.net_margin_pct,1)}</span></div>
-      <div class="mrow"><span class="k">ROE</span><span class="v">${fmtPct(t.fund.roe_pct,1)}</span></div>
-      <div class="mrow"><span class="k">Debt / Equity</span><span class="v">${fmtNum(t.fund.debt_to_equity,2)}</span></div>
-      <div class="mrow"><span class="k">Dividend Yield</span><span class="v">${fmtPct(t.fund.dividend_yield_pct,2)}</span></div>
-    </div>
-
-    <div class="card">
-      <h2 class="cat">Catalysts &amp; Sentiment</h2>
-      <div class="mrow"><span class="k">Next Earnings</span><span class="v thai">${t.catalyst.next_earnings||'—'} ${t.catalyst.days_to_earn!=null ? '<span class="pos">('+t.catalyst.days_to_earn+'d)</span>' : ''}</span></div>
-      <div class="mrow"><span class="k">News (30d)</span><span class="v">${t.catalyst.recent_news_count_30d||0} articles</span></div>
-      <div class="mrow"><span class="k">Sentiment (30d)</span><span class="v ${pctCls(t.catalyst.sentiment_30d)}">${fmtNum(t.catalyst.sentiment_30d,2)} / 1.0</span></div>
-      <div style="margin-top:12px;">
-        <div style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">Key Catalysts</div>
-        <ul style="list-style:none; padding:0; font-family:'IBM Plex Sans Thai',sans-serif;">
-          ${(t.catalyst.key_catalysts||[]).map(c => `<li style="padding:6px 0 6px 18px; position:relative; font-size:13px; line-height:1.6;"><span style="position:absolute;left:2px;top:13px;width:6px;height:6px;background:var(--yellow);border-radius:50%;"></span>${c}</li>`).join('')}
-        </ul>
-      </div>
-    </div>
-  </div>
-
-  <div class="narr">
-    <h2>Thai Analysis · ทำไมต้องหุ้นตัวนี้ตอนนี้</h2>
-    <div class="head">${t.narrative_th.headline}</div>
-    <div class="sum">${t.narrative_th.summary}</div>
-    <h3>Why Now · เหตุผลในการเข้าซื้อ</h3>
-    <ul class="why">
-      ${(t.narrative_th.why_now||[]).map(x => `<li>${x}</li>`).join('')}
-    </ul>
-    <h3>Risks · ความเสี่ยงที่ต้องระวัง</h3>
-    <ul class="risks">
-      ${(t.narrative_th.risks||[]).map(x => `<li>${x}</li>`).join('')}
-    </ul>
-    <div class="thesis">${t.narrative_th.thesis_short}</div>
-  </div>
-
-  <div class="disc">
-    <strong>Disclaimer:</strong> ข้อมูลเพื่อการศึกษาและวิเคราะห์เทคนิคเท่านั้น · ไม่ใช่คำแนะนำการลงทุน · ราคาและตัวชี้วัด ณ ${asof} · ผู้ลงทุนต้องศึกษาและรับความเสี่ยงด้วยตนเอง
-  </div>
-  `;
-  document.getElementById('content').innerHTML = html;
-}
-
-async function load() {
-  try {
-    const resp = await fetch('../dataset.json?ts=' + Date.now());
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const d = await resp.json();
-    const t = (d.tickers||[]).find(x => x.symbol === SYMBOL);
-    if (!t) {
-      document.getElementById('content').innerHTML = '<div class="state">⚠ Ticker not found: ' + SYMBOL + '</div>';
-      return;
-    }
-    render(t, d.as_of);
-  } catch (e) {
-    document.getElementById('content').innerHTML = '<div class="state">⚠ Failed to load data: ' + e.message + '</div>';
-  }
-}
-load();
-</script>
-</body>
-</html>
+          <div class="v pos">${fmtUSD(t.

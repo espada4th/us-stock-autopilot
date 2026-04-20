@@ -46,8 +46,11 @@
   }
   .brand h1 { font-size:16px; font-weight:700; letter-spacing:-0.01em; }
   .brand .sub { font-size:11px; color:var(--muted); margin-top:1px; }
-  .meta { display:flex; gap:16px; font-size:12px; color:var(--muted); }
-  .meta .asof { color:var(--text); font-weight:500; }
+  .meta { display:flex; gap:16px; font-size:12px; color:var(--muted); align-items:center; flex-wrap:wrap; }
+  .meta .asof { color:var(--text); font-weight:500; font-family:'JetBrains Mono',monospace; }
+  .meta .ago { font-size:11px; padding:2px 8px; border-radius:10px; background:var(--panel); border:1px solid var(--line); }
+  .meta .ago.stale { color:var(--yellow); border-color:rgba(245,196,81,0.35); }
+  .meta .ago.fresh { color:var(--green); border-color:rgba(34,211,160,0.35); }
   .meta .dot { width:6px; height:6px; border-radius:50%; background:var(--green); display:inline-block; margin-right:6px; vertical-align:middle; animation:pulse 2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.5;} }
 
@@ -149,6 +152,15 @@
   .sig.sig-bb { background:rgba(255,156,91,0.14); color:var(--orange); }
   .sig.sig-sup { background:rgba(245,196,81,0.14); color:var(--yellow); }
 
+  /* Sparkline */
+  .spark { display:block; }
+  .spark path { fill:none; stroke-width:1.5; }
+  .spark.up path { stroke:var(--green); }
+  .spark.down path { stroke:var(--red); }
+  .spark .fill { fill-opacity:0.12; stroke:none; }
+  .spark.up .fill { fill:var(--green); }
+  .spark.down .fill { fill:var(--red); }
+
   .disclaimer { max-width:1600px; margin:20px auto 0; padding:0 24px; font-size:11px; color:var(--sub); text-align:center; line-height:1.6; }
 
   /* Loading */
@@ -180,8 +192,9 @@
       </div>
     </div>
     <div class="meta">
-      <span><span class="dot"></span>Auto-refresh</span>
+      <span><span class="dot"></span>Auto-refresh · Mon-Sat 08:00 TH</span>
       <span class="asof" id="asof">—</span>
+      <span id="ago" class="ago">—</span>
       <span id="universe">—</span>
     </div>
   </div>
@@ -209,6 +222,7 @@
           <th data-k="star_rating" class="num col-hide-md">★</th>
           <th data-k="days_to_earn" class="num col-hide-md">Earn in <span class="arrow">↕</span></th>
           <th data-k="entry_low" class="num col-hide-sm">Entry Zone <span class="arrow">↕</span></th>
+          <th class="col-hide-md">90D</th>
           <th class="col-hide-sm">Signals</th>
         </tr>
       </thead>
@@ -260,6 +274,43 @@ function sigClass(s) {
   if (s.includes('support')) return 'sig-sup';
   return '';
 }
+function sparkSvg(closes, w=80, h=24) {
+  if (!closes || closes.length < 2) return '';
+  const lo = Math.min(...closes), hi = Math.max(...closes);
+  const rng = (hi - lo) || 1;
+  const pad = 2;
+  const pts = closes.map((c, i) => {
+    const x = pad + (i / (closes.length - 1)) * (w - pad*2);
+    const y = pad + (1 - (c - lo) / rng) * (h - pad*2);
+    return [x.toFixed(1), y.toFixed(1)];
+  });
+  const line = 'M' + pts.map(p => p.join(',')).join('L');
+  const area = line + `L${pts[pts.length-1][0]},${h} L${pts[0][0]},${h} Z`;
+  const up = closes[closes.length - 1] >= closes[0];
+  return `<svg class="spark ${up?'up':'down'}" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path class="fill" d="${area}"/><path d="${line}"/></svg>`;
+}
+
+function relativeTime(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + ' min ago';
+  if (s < 86400) return Math.floor(s/3600) + ' hr ago';
+  return Math.floor(s/86400) + ' day' + (Math.floor(s/86400)===1?'':'s') + ' ago';
+}
+
+function updateAgo() {
+  if (!DATA || !DATA.generated_at) return;
+  const el = document.getElementById('ago');
+  if (!el) return;
+  const txt = relativeTime(DATA.generated_at);
+  const s = Math.floor((Date.now() - Date.parse(DATA.generated_at)) / 1000);
+  el.textContent = txt;
+  el.className = 'ago ' + (s < 3600 ? 'fresh' : s < 86400 ? '' : 'stale');
+}
+
 function sigLabel(s) {
   const map = {
     'pullback_>20pct': 'PULL -20%',
@@ -365,7 +416,7 @@ function renderTable() {
   const rows = sortRows(getFiltered());
   const tbody = document.getElementById('tbody');
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="13" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="14" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>`;
   } else {
     tbody.innerHTML = rows.map(t => {
       const dc = dipClass(t.dip_score);
@@ -378,60 +429,4 @@ function renderTable() {
         <td class="col-hide-md"><span class="sector-tag">${t.sector}</span></td>
         <td class="num">${fmtPrice(t.price)}</td>
         <td class="num ${pctCls(t.change_d1_pct)}">${fmtPct(t.change_d1_pct)}</td>
-        <td class="num col-hide-sm ${pctCls(t.change_1m_pct)}">${fmtPct(t.change_1m_pct)}</td>
-        <td class="num ${pctCls(t.pullback_from_high_pct)}">${fmtPct(t.pullback_from_high_pct)}</td>
-        <td class="num col-hide-sm"><span class="rsi-pill ${rc}">${fmtNum(t.tech.rsi_14,1)}</span></td>
-        <td class="num"><span class="dip-badge ${dc}">${t.dip_score}</span></td>
-        <td class="num col-hide-md pos">${fmtPct(t.val.discount_to_fv_pct)}</td>
-        <td class="num col-hide-md">${stars(t.val.star_rating)}</td>
-        <td class="num col-hide-md ${earnCls}">${earn}</td>
-        <td class="num col-hide-sm mono">$${t.entry.entry_low.toFixed(0)}-${t.entry.entry_high.toFixed(0)}</td>
-        <td class="col-hide-sm"><div class="signals">${sigs}</div></td>
-      </tr>`;
-    }).join('');
-  }
-  // Update sort arrows
-  document.querySelectorAll('th').forEach(th => {
-    th.classList.remove('sorted');
-    const arr = th.querySelector('.arrow'); if (arr) arr.textContent = '↕';
-  });
-  const active = document.querySelector(`th[data-k="${state.sortKey}"]`);
-  if (active) {
-    active.classList.add('sorted');
-    const arr = active.querySelector('.arrow'); if (arr) arr.textContent = state.sortDir === 1 ? '↑' : '↓';
-  }
-}
-
-function bindSort() {
-  document.querySelectorAll('th[data-k]').forEach(th => {
-    th.onclick = () => {
-      const k = th.dataset.k;
-      if (state.sortKey === k) state.sortDir *= -1;
-      else { state.sortKey = k; state.sortDir = (k === 'symbol' || k === 'sector') ? 1 : -1; }
-      renderTable();
-    };
-  });
-}
-
-async function load() {
-  try {
-    const resp = await fetch('dataset.json?ts=' + Date.now());
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    DATA = await resp.json();
-    document.getElementById('asof').textContent = 'As of ' + (DATA.as_of || '—');
-    document.getElementById('asof2').textContent = DATA.as_of || '—';
-    document.getElementById('universe').textContent = DATA.universe_label || '';
-    document.getElementById('state').style.display = 'none';
-    document.getElementById('scanner').style.display = '';
-    buildKPIs();
-    buildFilters();
-    bindSort();
-    renderTable();
-  } catch (e) {
-    document.getElementById('state').innerHTML = '⚠ Failed to load dataset: ' + e.message;
-  }
-}
-load();
-</script>
-</body>
-</html>
+        <td class="num col-hide-sm ${pctCls(t.change_1m_pct)}">${

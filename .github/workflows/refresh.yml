@@ -2,13 +2,18 @@ name: Refresh dashboard data
 
 on:
   schedule:
-    # Every hour on :15 during US market hours (13:15 - 21:15 UTC = 9:15am - 5:15pm ET)
-    # Mon-Fri. Adjust as you like.
-    - cron: "15 13-21 * * 1-5"
-  workflow_dispatch: {}   # manual trigger button
+    # Hourly between Monday 08:00 Thai time → Saturday 08:00 Thai time (UTC+7).
+    # Window: Mon 01:00 UTC → Sat 01:00 UTC (continuous, ~120 hourly runs/week).
+    #
+    # GitHub Actions only supports POSIX cron (no minute ranges across days),
+    # so we split the window into 3 schedules:
+    - cron: "0 1-23 * * 1"     # Mon 01:00-23:00 UTC  (Mon 08:00 Thai → Tue 06:00 Thai)
+    - cron: "0 * * * 2-5"      # Tue-Fri all 24 hours
+    - cron: "0 0-1 * * 6"      # Sat 00:00-01:00 UTC  (Sat 07:00-08:00 Thai)
+  workflow_dispatch: {}        # manual trigger button
 
 permissions:
-  contents: write   # allow the workflow to commit dataset.json back
+  contents: write              # allow the workflow to commit dataset.json back
 
 concurrency:
   group: refresh
@@ -18,9 +23,9 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
