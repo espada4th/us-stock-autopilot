@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dateutil
+          pip install requests python-dateutil yfinance pandas
 
       - name: Refresh dataset.json
         env:
@@ -48,7 +48,13 @@ jobs:
           if [ -n "$(git status --porcelain dataset.json)" ]; then
             git add dataset.json
             git commit -m "refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+            # Retry push up to 3 times with rebase, in case origin/main moved
+            # while we were running (e.g. another commit landed).
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push origin main && break
+              echo "push attempt $i failed, retrying in 5s..."
+              sleep 5
+            done
           else
             echo "No changes to dataset.json"
           fi

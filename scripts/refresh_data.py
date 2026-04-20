@@ -86,14 +86,67 @@ def _append_history(t, today):
         hist["closes"] = closes
 
 
+def refresh_via_yfinance(data):
+    """Primary source: yfinance (free, no key, no quota)."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        print("yfinance not installed - skipping.")
+        return False
+
+    tickers = data.get("tickers", [])
+    syms = [t["symbol"] for t in tickers if t.get("symbol")]
+    if not syms:
+        return False
+
+    today_utc = dt.datetime.utcnow().strftime("%Y-%m-%d")
+    updated = 0
+    try:
+        # Batch download last 2 days of daily OHLC for all tickers at once
+        hist_df = yf.download(
+            syms, period="5d", interval="1d",
+            group_by="ticker", auto_adjust=False, progress=False, threads=True,
+        )
+    except Exception as e:
+        print("yfinance batch download failed: {}".format(e), file=sys.stderr)
+        return False
+
+    for t in tickers:
+        sym = t["symbol"]
+        try:
+            # hist_df is a MultiIndex DataFrame: (ticker, field)
+            df_sym = hist_df[sym].dropna() if sym in hist_df.columns.get_level_values(0) else None
+            if df_sym is None or df_sym.empty:
+                continue
+            last = df_sym.iloc[-1]
+            prev = df_sym.iloc[-2] if len(df_sym) >= 2 else last
+            close = float(last["Close"])
+            prev_close = float(prev["Close"])
+            t["price"] = round(close, 2)
+            if prev_close:
+                t["change_d1_pct"] = round(100 * (close - prev_close) / prev_close, 2)
+            _recompute_derived(t)
+            _append_history(t, today_utc)
+            updated += 1
+        except Exception as e:
+            print("yfinance: skip {}: {}".format(sym, e), file=sys.stderr)
+            continue
+
+    print("yfinance: updated {}/{} tickers".format(updated, len(tickers)))
+    return updated > 0
+
+
 def refresh_via_fmp(data):
+    """Fallback: FMP stable API (requires FMP_API_KEY)."""
     import requests
     tickers = data.get("tickers", [])
     syms = ",".join(t["symbol"] for t in tickers if t.get("symbol"))
     if not syms:
         return False
 
-    url = "https://financialmodelingprep.com/api/v3/quote/{}?apikey={}".format(syms, FMP_KEY)
+    # FMP free tier: /api/v3/quote/{batch} now returns 403.
+    # Use /stable/quote-short (free) with batch in symbol= param.
+    url = "https://financialmodelingprep.com/stable/batch-quote?symbols={}&apikey={}".format(syms, FMP_KEY)
     try:
         r = requests.get(url, timeout=20)
         r.raise_for_status()
@@ -155,15 +208,16 @@ def _regen_summary(data):
 def main():
     data = _load_current()
 
-    ok = False
-    if BIGDATA_KEY:
-        ok = refresh_via_bigdata(data)
+    # Priority: yfinance (free, no key) -> FMP (needs key) -> Bigdata (TODO)
+    ok = refresh_via_yfinance(data)
     if not ok and FMP_KEY:
+        print("yfinance failed, trying FMP fallback...")
         ok = refresh_via_fmp(data)
+    if not ok and BIGDATA_KEY:
+        ok = refresh_via_bigdata(data)
 
     if not ok:
-        print("No API key configured - bumping timestamp only.")
-        print("Add BIGDATA_API_KEY or FMP_API_KEY as repo secrets to enable refresh.")
+        print("All price sources failed - bumping timestamp only.")
     else:
         _regen_summary(data)
 
