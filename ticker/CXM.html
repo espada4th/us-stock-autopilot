@@ -239,6 +239,7 @@
 // SYMBOL is injected by generator - replace "AAPL"
 const SYMBOL = "CXM";
 
+// ===================== formatters =====================
 function stars(n) {
   if (!n) return '<span class="stars"><span class="off">★★★★★</span></span>';
   let h = '<span class="stars">';
@@ -246,14 +247,17 @@ function stars(n) {
   return h + '</span>';
 }
 function fmtPct(v, d=1) { if (v==null||isNaN(v)) return '—'; const s = v>0?'+':''; return s + v.toFixed(d) + '%'; }
-function fmtNum(v, d=2) { if (v==null) return '—'; return v.toFixed(d); }
-function fmtUSD(v, d=2) { if (v==null) return '—'; return '$' + v.toFixed(d); }
-function fmtB(v) { if (v==null) return '—'; return v >= 1000 ? (v/1000).toFixed(2)+'T' : v.toFixed(1)+'B'; }
+function fmtNum(v, d=2) { if (v==null||isNaN(v)) return '—'; return v.toFixed(d); }
+function fmtUSD(v, d=2) { if (v==null||isNaN(v)) return '—'; return '$' + v.toFixed(d); }
+function fmtB(v) { if (v==null||isNaN(v)) return '—'; return v >= 1000 ? (v/1000).toFixed(2)+'T' : v.toFixed(1)+'B'; }
 function pctCls(v) { if (v==null) return 'neu'; return v>0 ? 'pos' : v<0 ? 'neg' : 'neu'; }
 function dipCls(n) { if (n>=80) return 's80'; if (n>=65) return 's65'; if (n>=50) return 's50'; return 's0'; }
 function moatCls(m) { return m==='Wide' ? 'moat-wide' : m==='Narrow' ? 'moat-narrow' : 'moat-none'; }
 function fhCls(h) { return h==='Strong'?'fh-strong' : h==='Moderate'?'fh-mod' : 'fh-weak'; }
+function esc(s) { return String(s==null?'':s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+
 function sigClass(s) {
+  if (!s) return '';
   if (s.includes('pullback')) return 'sig-pull';
   if (s.includes('rsi')) return 'sig-rsi';
   if (s.includes('macd')) return 'sig-macd';
@@ -268,8 +272,9 @@ function sigLabel(s) {
     'rsi_oversold_recovery':'RSI OVERSOLD','macd_bullish_cross':'MACD BULLISH',
     'fair_value_discount_>15pct':'FV -15%','fair_value_discount_>10pct':'FV -10%',
     'near_support_level':'NEAR SUPPORT','near_bb_lower':'NEAR BB LOWER','wide_moat_4star':'WIDE MOAT',
+    'volume_surge':'VOL SURGE','near_52w_low':'NEAR 52W LOW',
   };
-  return map[s] || s.replace(/_/g,' ').toUpperCase();
+  return map[s] || String(s).replace(/_/g,' ').toUpperCase();
 }
 
 function relativeTime(iso) {
@@ -291,15 +296,21 @@ function updateAgo(iso) {
   el.className = 'ago ' + (s < 3600 ? 'fresh' : s < 86400 ? '' : 'stale');
 }
 
+// ===================== price chart =====================
 function buildChart(t) {
   const hist = t.history;
-  if (!hist || !hist.closes || hist.closes.length < 2) return '<div style="padding:40px; text-align:center; color:var(--muted);">No price history available</div>';
+  if (!hist || !hist.closes || hist.closes.length < 2) {
+    return '<div style="padding:40px; text-align:center; color:var(--muted);">No price history available</div>';
+  }
   const closes = hist.closes, dates = hist.dates || [];
   const W = 1040, H = 260, padL = 42, padR = 12, padT = 14, padB = 28;
   const innerW = W - padL - padR, innerH = H - padT - padB;
 
-  // y-range: include closes, support, resistance, fv, entry zone
-  const extras = [t.tech.support, t.tech.resistance, t.val.fair_value, t.entry.entry_low, t.entry.entry_high, t.entry.stop_loss].filter(x => x != null);
+  const tech = t.tech || {};
+  const val = t.val || {};
+  const entry = t.entry || {};
+  const extras = [tech.support, tech.resistance, val.fair_value, entry.entry_low, entry.entry_high, entry.stop_loss]
+    .filter(x => x != null && !isNaN(x));
   const lo = Math.min(...closes, ...extras);
   const hi = Math.max(...closes, ...extras);
   const rng = (hi - lo) || 1;
@@ -310,38 +321,33 @@ function buildChart(t) {
   const x = i => padL + (i / (closes.length - 1)) * innerW;
   const y = v => padT + (1 - (v - yLo) / yRng) * innerH;
 
-  // Build line + area path
   const linePath = 'M' + closes.map((c, i) => `${x(i).toFixed(1)},${y(c).toFixed(1)}`).join('L');
   const areaPath = linePath + `L${x(closes.length-1).toFixed(1)},${padT + innerH} L${x(0).toFixed(1)},${padT + innerH} Z`;
 
-  // Y-axis labels (5 ticks)
   const yTicks = [];
   for (let i = 0; i <= 4; i++) {
     const v = yLo + (yRng / 4) * i;
     yTicks.push({ v, y: y(v) });
   }
-  // X-axis labels (every ~30 days)
   const xTicks = [];
   const step = Math.max(1, Math.floor(closes.length / 5));
   for (let i = 0; i < closes.length; i += step) {
     xTicks.push({ i, label: dates[i] ? dates[i].slice(5) : '' });
   }
-  if (xTicks[xTicks.length-1].i !== closes.length - 1) {
+  if (xTicks.length && xTicks[xTicks.length-1].i !== closes.length - 1) {
     xTicks.push({ i: closes.length - 1, label: dates[closes.length - 1] ? dates[closes.length - 1].slice(5) : '' });
   }
 
-  // Entry zone band (horizontal band from entry_low to entry_high)
-  const entryBand = t.entry.entry_low && t.entry.entry_high
-    ? `<rect class="entry-band" x="${padL}" y="${y(t.entry.entry_high)}" width="${innerW}" height="${y(t.entry.entry_low) - y(t.entry.entry_high)}"/>`
+  const entryBand = (entry.entry_low && entry.entry_high)
+    ? `<rect class="entry-band" x="${padL}" y="${y(entry.entry_high)}" width="${innerW}" height="${y(entry.entry_low) - y(entry.entry_high)}"/>`
     : '';
 
-  // Horizontal ref lines
-  const supLine = t.tech.support ? `<line class="sup-line" x1="${padL}" x2="${padL+innerW}" y1="${y(t.tech.support)}" y2="${y(t.tech.support)}"/>
-    <text class="label sup" x="${padL+innerW-4}" y="${y(t.tech.support)-4}" text-anchor="end">SUP $${t.tech.support.toFixed(2)}</text>` : '';
-  const resLine = t.tech.resistance ? `<line class="res-line" x1="${padL}" x2="${padL+innerW}" y1="${y(t.tech.resistance)}" y2="${y(t.tech.resistance)}"/>
-    <text class="label res" x="${padL+innerW-4}" y="${y(t.tech.resistance)-4}" text-anchor="end">RES $${t.tech.resistance.toFixed(2)}</text>` : '';
-  const fvLine = t.val.fair_value ? `<line class="fv-line" x1="${padL}" x2="${padL+innerW}" y1="${y(t.val.fair_value)}" y2="${y(t.val.fair_value)}"/>
-    <text class="label fv" x="${padL+innerW-4}" y="${y(t.val.fair_value)-4}" text-anchor="end">FV $${t.val.fair_value.toFixed(2)}</text>` : '';
+  const supLine = tech.support ? `<line class="sup-line" x1="${padL}" x2="${padL+innerW}" y1="${y(tech.support)}" y2="${y(tech.support)}"/>
+    <text class="label sup" x="${padL+innerW-4}" y="${y(tech.support)-4}" text-anchor="end">SUP $${tech.support.toFixed(2)}</text>` : '';
+  const resLine = tech.resistance ? `<line class="res-line" x1="${padL}" x2="${padL+innerW}" y1="${y(tech.resistance)}" y2="${y(tech.resistance)}"/>
+    <text class="label res" x="${padL+innerW-4}" y="${y(tech.resistance)-4}" text-anchor="end">RES $${tech.resistance.toFixed(2)}</text>` : '';
+  const fvLine = val.fair_value ? `<line class="fv-line" x1="${padL}" x2="${padL+innerW}" y1="${y(val.fair_value)}" y2="${y(val.fair_value)}"/>
+    <text class="label fv" x="${padL+innerW-4}" y="${y(val.fair_value)-4}" text-anchor="end">FV $${val.fair_value.toFixed(2)}</text>` : '';
 
   return `
   <svg class="price-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
@@ -355,36 +361,24 @@ function buildChart(t) {
     ${resLine}
     ${fvLine}
     <g class="axis">
-      ${yTicks.map(tk => `<text x="${padL-6}" y="${tk.y.toFixed(1)+3}" text-anchor="end">$${tk.v.toFixed(0)}</text>`).join('')}
+      ${yTicks.map(tk => `<text x="${padL-6}" y="${(tk.y+3).toFixed(1)}" text-anchor="end">$${tk.v.toFixed(0)}</text>`).join('')}
       ${xTicks.map(tk => `<text x="${x(tk.i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${tk.label}</text>`).join('')}
     </g>
   </svg>`;
 }
 
-function render(t, asof, generatedAt) {
-  document.getElementById('asof').textContent = asof || '—';
-  document.getElementById('pt').textContent = `${t.symbol} · ${t.name} · Buy-the-Dip`;
-  if (generatedAt) {
-    updateAgo(generatedAt);
-    setInterval(() => updateAgo(generatedAt), 30000);
-  }
-
-  const rangePos = Math.max(0, Math.min(100, t.pos_52w_pct));
-  const emaStatus = { above_both:'Above EMA20/50', between:'Between EMA20/50', below_both:'Below EMA20/50' }[t.tech.ema_status] || t.tech.ema_status;
-  const bbStatus = { near_lower:'Near Lower Band', mid:'Mid', near_upper:'Near Upper Band', breakout_up:'Breakout Up', breakdown:'Breakdown' }[t.tech.bb_status] || t.tech.bb_status;
-  const trendLabel = { up:'⬆ Uptrend', down:'⬇ Downtrend', sideways:'⇔ Sideways' }[t.tech.trend] || t.tech.trend;
-
-  const sigChips = (t.dip_signals||[]).map(s => `<span class="sig ${sigClass(s)}">${sigLabel(s)}</span>`).join('');
-
-  const html = `
+// ===================== section renderers (resilient) =====================
+function renderHero(t) {
+  return `
   <div class="hero">
     <div class="hero-main">
-      <h1><span class="sym-logo" style="background:${t.logo_color||'#5b9bff'}">${t.symbol.slice(0,2)}</span> ${t.symbol}</h1>
-      <div class="name">${t.name}</div>
+      <h1><span class="sym-logo" style="background:${t.logo_color||'#5b9bff'}">${esc(t.symbol).slice(0,2)}</span> ${esc(t.symbol)}</h1>
+      <div class="name">${esc(t.name || t.symbol)}</div>
       <div class="tags">
-        <span class="tag hi">${t.sector}</span>
-        <span class="tag">${t.industry||''}</span>
-        <span class="tag">MCap ${fmtB(t.market_cap_b)}</span>
+        ${t.sector ? `<span class="tag hi">${esc(t.sector)}</span>` : ''}
+        ${t.industry ? `<span class="tag">${esc(t.industry)}</span>` : ''}
+        ${t.market_cap_b ? `<span class="tag">MCap ${fmtB(t.market_cap_b)}</span>` : ''}
+        ${Array.isArray(t.indices) && t.indices.length ? `<span class="tag">${t.indices.join(' · ')}</span>` : ''}
       </div>
     </div>
     <div class="hero-price">
@@ -395,71 +389,255 @@ function render(t, asof, generatedAt) {
         <span class="${pctCls(t.change_ytd_pct)}">${fmtPct(t.change_ytd_pct)} YTD</span>
       </div>
     </div>
-  </div>
+  </div>`;
+}
 
+function renderDipCard(t) {
+  const narr = t.narrative_th || {};
+  const headline = narr.headline || `Dip Score ${t.dip_score||0} · signals from price action`;
+  const sigChips = (t.dip_signals || []).map(s => `<span class="sig ${sigClass(s)}">${sigLabel(s)}</span>`).join('');
+  return `
   <div class="dip-card">
     <div class="dip-row">
       <div class="dip-score ${dipCls(t.dip_score)}">
-        <div class="n">${t.dip_score}</div>
+        <div class="n">${t.dip_score||0}</div>
         <div class="l">DIP SCORE</div>
       </div>
       <div class="dip-head">
-        <div class="h">${t.narrative_th.headline}</div>
-        <div class="p">Composite 0-100 จาก pullback depth, RSI, MACD, fair value discount, BB position, moat & rating</div>
+        <div class="h">${esc(headline)}</div>
+        <div class="p">Composite 0-100 from pullback depth, RSI, MACD, volume surge, 52w position${t.val ? ', fair value, moat' : ''}</div>
         <div class="dip-signals">${sigChips}</div>
       </div>
     </div>
-  </div>
+  </div>`;
+}
 
+function renderEntryZone(t) {
+  const e = t.entry;
+  if (!e) return '';
+  return `
   <div class="entry-card">
     <div class="entry-head">Suggested Entry Zone</div>
     <div class="entry-grid">
       <div class="entry-box entry">
         <div class="l">Entry Low</div>
-        <div class="v">${fmtUSD(t.entry.entry_low)}</div>
+        <div class="v">${fmtUSD(e.entry_low)}</div>
         <div class="sub">at support</div>
       </div>
       <div class="entry-box entry">
         <div class="l">Entry High</div>
-        <div class="v">${fmtUSD(t.entry.entry_high)}</div>
+        <div class="v">${fmtUSD(e.entry_high)}</div>
         <div class="sub">current area</div>
       </div>
       <div class="entry-box stop">
         <div class="l">Stop Loss</div>
-        <div class="v">${fmtUSD(t.entry.stop_loss)}</div>
-        <div class="sub">${fmtPct((t.entry.stop_loss/t.price-1)*100)}</div>
+        <div class="v">${fmtUSD(e.stop_loss)}</div>
+        <div class="sub">${t.price && e.stop_loss ? fmtPct((e.stop_loss/t.price-1)*100) : '—'}</div>
       </div>
       <div class="entry-box t1">
         <div class="l">Target 1</div>
-        <div class="v">${fmtUSD(t.entry.target_1)}</div>
-        <div class="sub">${fmtPct((t.entry.target_1/t.price-1)*100)} · resistance</div>
+        <div class="v">${fmtUSD(e.target_1)}</div>
+        <div class="sub">${t.price && e.target_1 ? fmtPct((e.target_1/t.price-1)*100) : '—'} · resistance</div>
       </div>
       <div class="entry-box t2">
         <div class="l">Target 2 (FV)</div>
-        <div class="v">${fmtUSD(t.entry.target_2)}</div>
-        <div class="sub">${fmtPct((t.entry.target_2/t.price-1)*100)} · R/R ${fmtNum(t.entry.risk_reward,1)}</div>
+        <div class="v">${fmtUSD(e.target_2)}</div>
+        <div class="sub">${t.price && e.target_2 ? fmtPct((e.target_2/t.price-1)*100) : '—'} · R/R ${fmtNum(e.risk_reward,1)}</div>
       </div>
     </div>
-  </div>
+  </div>`;
+}
 
+function renderChart(t) {
+  return `
   <div class="chart-card">
     <div class="chart-head">
-      <div class="t">Price Chart · 90 Days</div>
+      <div class="t">Price Chart · ${t.history && t.history.closes ? t.history.closes.length+' Days' : '—'}</div>
       <div class="chart-legend">
         <span class="l-px">Close</span>
-        <span class="l-entry">Entry zone</span>
-        <span class="l-sup">Support</span>
-        <span class="l-res">Resistance</span>
-        <span class="l-fv">Fair Value</span>
+        ${t.entry ? '<span class="l-entry">Entry zone</span>' : ''}
+        ${t.tech && t.tech.support ? '<span class="l-sup">Support</span>' : ''}
+        ${t.tech && t.tech.resistance ? '<span class="l-res">Resistance</span>' : ''}
+        ${t.val && t.val.fair_value ? '<span class="l-fv">Fair Value</span>' : ''}
       </div>
     </div>
     ${buildChart(t)}
-  </div>
+  </div>`;
+}
 
-  <div class="grid2">
-    <div class="card">
-      <h2 class="val">Valuation (Morningstar-style)</h2>
-      <div class="val-top">
-        <div class="val-big">
-          <div class="l">Fair Value</div>
-          <div class="v pos">${fmtUSD(t.
+function renderValuation(t) {
+  if (!t.val) return '';
+  const v = t.val;
+  const disc = v.discount_to_fv_pct;
+  const discCls = disc == null ? 'neu' : disc > 0 ? 'pos' : 'neg';
+  const rows = [
+    v.analyst_consensus != null ? `<div class="mrow"><span class="k">Analyst Consensus</span><span class="v thai">${esc(v.analyst_consensus)}</span></div>` : '',
+    v.avg_price_target != null ? `<div class="mrow"><span class="k">Avg Price Target</span><span class="v">${fmtUSD(v.avg_price_target)}</span></div>` : '',
+    v.high_price_target != null ? `<div class="mrow"><span class="k">High Target</span><span class="v">${fmtUSD(v.high_price_target)}</span></div>` : '',
+    v.low_price_target != null ? `<div class="mrow"><span class="k">Low Target</span><span class="v">${fmtUSD(v.low_price_target)}</span></div>` : '',
+    v.uncertainty ? `<div class="mrow"><span class="k">Uncertainty</span><span class="v thai">${esc(v.uncertainty)}</span></div>` : '',
+    v.financial_health ? `<div class="mrow"><span class="k">Financial Health</span><span class="v ${fhCls(v.financial_health)}">${esc(v.financial_health)}</span></div>` : '',
+  ].filter(Boolean).join('');
+  return `
+  <div class="card">
+    <h2 class="val">Valuation (Morningstar-style)</h2>
+    <div class="val-top">
+      <div class="val-big">
+        <div class="l">Fair Value</div>
+        <div class="v">${fmtUSD(v.fair_value)}</div>
+        <div class="sub ${discCls}">${disc==null?'—':fmtPct(disc)+' vs price'}</div>
+      </div>
+      <div class="val-big">
+        <div class="l">Star Rating</div>
+        <div class="v">${stars(v.star_rating)}</div>
+        <div class="sub">${v.moat ? `<span class="${moatCls(v.moat)}">${esc(v.moat)} Moat</span>` : ''}</div>
+      </div>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+function renderTechnicals(t) {
+  const tech = t.tech || {};
+  const pos = t.pos_52w_pct != null ? Math.max(0, Math.min(100, t.pos_52w_pct)) : null;
+  const rangeBar = pos != null ? `
+    <div class="range">
+      <div class="fill" style="width:${pos}%"></div>
+      <div class="mark" style="left:calc(${pos}% - 1.5px)"></div>
+    </div>
+    <div class="range-labels"><span>52W Low ${fmtUSD(t.low_52w)}</span><span>${fmtNum(pos,0)}%</span><span>52W High ${fmtUSD(t.high_52w)}</span></div>
+  ` : '';
+  const emaStatus = { above_both:'Above EMA20/50', between:'Between EMA20/50', below_both:'Below EMA20/50' }[tech.ema_status] || tech.ema_status || '—';
+  const bbStatus = { near_lower:'Near Lower Band', mid:'Mid', near_upper:'Near Upper Band', breakout_up:'Breakout Up', breakdown:'Breakdown' }[tech.bb_status] || tech.bb_status || '—';
+  const trendLabel = { up:'⬆ Uptrend', down:'⬇ Downtrend', sideways:'⇔ Sideways' }[tech.trend] || tech.trend || '—';
+  const rows = [
+    `<div class="mrow"><span class="k">Trend</span><span class="v">${esc(trendLabel)}</span></div>`,
+    tech.rsi_14 != null ? `<div class="mrow"><span class="k">RSI(14)</span><span class="v ${tech.rsi_14<30?'pos':tech.rsi_14>70?'neg':'neu'}">${fmtNum(tech.rsi_14,1)}</span></div>` : '',
+    tech.macd_signal ? `<div class="mrow"><span class="k">MACD</span><span class="v">${esc(tech.macd_signal)}</span></div>` : '',
+    `<div class="mrow"><span class="k">EMA Status</span><span class="v">${esc(emaStatus)}</span></div>`,
+    `<div class="mrow"><span class="k">Bollinger</span><span class="v">${esc(bbStatus)}</span></div>`,
+    tech.atr_pct != null ? `<div class="mrow"><span class="k">ATR %</span><span class="v">${fmtNum(tech.atr_pct,2)}%</span></div>` : '',
+    t.volume_surge_pct != null ? `<div class="mrow"><span class="k">Volume Surge</span><span class="v ${t.volume_surge_pct>50?'pos':'neu'}">${fmtPct(t.volume_surge_pct)}</span></div>` : '',
+    tech.support ? `<div class="mrow"><span class="k">Support</span><span class="v">${fmtUSD(tech.support)}</span></div>` : '',
+    tech.resistance ? `<div class="mrow"><span class="k">Resistance</span><span class="v">${fmtUSD(tech.resistance)}</span></div>` : '',
+    t.pullback_from_52w_high_pct != null ? `<div class="mrow"><span class="k">Pullback from 52W High</span><span class="v neg">${fmtPct(t.pullback_from_52w_high_pct)}</span></div>` : '',
+  ].filter(Boolean).join('');
+  return `
+  <div class="card">
+    <h2 class="tech">Technical Readings</h2>
+    ${rangeBar}
+    ${rows}
+  </div>`;
+}
+
+function renderFundamentals(t) {
+  if (!t.fund) return '';
+  const f = t.fund;
+  const rows = [
+    f.pe_ttm != null ? `<div class="mrow"><span class="k">P/E TTM</span><span class="v">${fmtNum(f.pe_ttm,1)}</span></div>` : '',
+    f.pe_fwd != null ? `<div class="mrow"><span class="k">P/E Forward</span><span class="v">${fmtNum(f.pe_fwd,1)}</span></div>` : '',
+    f.peg != null ? `<div class="mrow"><span class="k">PEG</span><span class="v">${fmtNum(f.peg,2)}</span></div>` : '',
+    f.ev_ebitda != null ? `<div class="mrow"><span class="k">EV / EBITDA</span><span class="v">${fmtNum(f.ev_ebitda,1)}</span></div>` : '',
+    f.revenue_growth_yoy_pct != null ? `<div class="mrow"><span class="k">Revenue Growth YoY</span><span class="v ${pctCls(f.revenue_growth_yoy_pct)}">${fmtPct(f.revenue_growth_yoy_pct)}</span></div>` : '',
+    f.eps_growth_yoy_pct != null ? `<div class="mrow"><span class="k">EPS Growth YoY</span><span class="v ${pctCls(f.eps_growth_yoy_pct)}">${fmtPct(f.eps_growth_yoy_pct)}</span></div>` : '',
+    f.operating_margin_pct != null ? `<div class="mrow"><span class="k">Operating Margin</span><span class="v">${fmtPct(f.operating_margin_pct)}</span></div>` : '',
+    f.roe_pct != null ? `<div class="mrow"><span class="k">ROE</span><span class="v">${fmtPct(f.roe_pct)}</span></div>` : '',
+    f.debt_equity != null ? `<div class="mrow"><span class="k">Debt / Equity</span><span class="v">${fmtNum(f.debt_equity,2)}</span></div>` : '',
+    f.dividend_yield_pct != null ? `<div class="mrow"><span class="k">Dividend Yield</span><span class="v">${fmtPct(f.dividend_yield_pct)}</span></div>` : '',
+  ].filter(Boolean).join('');
+  if (!rows) return '';
+  return `
+  <div class="card">
+    <h2 class="fund">Fundamentals</h2>
+    ${rows}
+  </div>`;
+}
+
+function renderCatalysts(t) {
+  const c = t.catalyst;
+  if (!c) return '';
+  const rows = [
+    c.earnings_date ? `<div class="mrow"><span class="k">Next Earnings</span><span class="v">${esc(c.earnings_date)}${c.earn_in_days!=null?` · ${c.earn_in_days}d`:''}</span></div>` : '',
+    c.sentiment ? `<div class="mrow"><span class="k">Sentiment</span><span class="v thai">${esc(c.sentiment)}</span></div>` : '',
+    Array.isArray(c.key_catalysts) && c.key_catalysts.length ? `<div class="mrow"><span class="k">Key Catalysts</span><span class="v thai" style="text-align:right; max-width:60%;">${c.key_catalysts.map(esc).join(' · ')}</span></div>` : '',
+  ].filter(Boolean).join('');
+  if (!rows) return '';
+  return `
+  <div class="card">
+    <h2 class="cat">Catalysts</h2>
+    ${rows}
+  </div>`;
+}
+
+function renderNarrative(t) {
+  const n = t.narrative_th;
+  if (!n) return '';
+  const why = Array.isArray(n.why_now) && n.why_now.length
+    ? `<h3>Why Now</h3><ul class="why">${n.why_now.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  const risks = Array.isArray(n.risks) && n.risks.length
+    ? `<h3>Risks</h3><ul class="risks">${n.risks.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  const thesis = n.thesis_short ? `<div class="thesis">${esc(n.thesis_short)}</div>` : '';
+  return `
+  <div class="narr">
+    <h2>Thai Narrative</h2>
+    ${n.headline ? `<div class="head">${esc(n.headline)}</div>` : ''}
+    ${n.summary ? `<div class="sum">${esc(n.summary)}</div>` : ''}
+    ${why}
+    ${risks}
+    ${thesis}
+  </div>`;
+}
+
+// ===================== orchestrator =====================
+function render(t, asof, generatedAt) {
+  document.getElementById('asof').textContent = asof || '—';
+  document.getElementById('pt').textContent = `${t.symbol} · ${t.name || t.symbol} · Buy-the-Dip`;
+  if (generatedAt) {
+    updateAgo(generatedAt);
+    setInterval(() => updateAgo(generatedAt), 30000);
+  }
+
+  const sections = [
+    renderHero(t),
+    renderDipCard(t),
+    renderEntryZone(t),
+    renderChart(t),
+    '<div class="grid2">',
+      renderValuation(t),
+      renderTechnicals(t),
+    '</div>',
+    '<div class="grid2">',
+      renderFundamentals(t),
+      renderCatalysts(t),
+    '</div>',
+    renderNarrative(t),
+    `<div class="disc">Data as of ${esc(asof||'—')}. Signals computed from price + volume (yfinance). Fundamentals/valuation shown when available. <strong>Not investment advice.</strong></div>`,
+  ];
+  document.getElementById('content').innerHTML = sections.join('\n');
+}
+
+// ===================== fetch =====================
+fetch('../dataset.json?_=' + Date.now())
+  .then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(data => {
+    const tickers = data.tickers || [];
+    const t = tickers.find(x => x.symbol === SYMBOL);
+    if (!t) {
+      document.getElementById('content').innerHTML =
+        `<div class="state">Ticker <strong>${esc(SYMBOL)}</strong> not in current top-${tickers.length} scanner results. <br><br><a href="../index.html" style="color:var(--blue);">← Back to scanner</a></div>`;
+      document.getElementById('pt').textContent = `${SYMBOL} · Not in top scanner`;
+      return;
+    }
+    render(t, data.as_of, data.generated_at);
+  })
+  .catch(err => {
+    console.error('Error loading dataset.json:', err);
+    document.getElementById('content').innerHTML =
+      `<div class="state">Error loading ticker data: ${esc(err.message||String(err))}</div>`;
+  });
+</script>
+</body>
+</html>
