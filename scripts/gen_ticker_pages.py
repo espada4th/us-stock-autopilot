@@ -17,7 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "dataset.json"
 TICKERS = ROOT / "ticker"
-TEMPLATE_FILE = TICKERS / "AAPL.html"  # any existing page works as template
+# Preferred template; fallback to any existing ticker/*.html if missing.
+PREFERRED_TEMPLATE = TICKERS / "AAPL.html"
+MIN_TEMPLATE_SIZE = 20000  # guard against truncated templates
 
 # Line that needs substitution:
 #   const SYMBOL = "AAPL";
@@ -29,11 +31,50 @@ def _load_dataset():
     return json.loads(raw.decode("utf-8"))
 
 
+def _find_template():
+    """Return (path, text) for a usable template page.
+
+    Strategy:
+      1. Prefer ticker/AAPL.html (canonical template).
+      2. Fallback: pick the LARGEST ticker/*.html that parses as a valid template
+         (contains the SYMBOL-assignment line AND is above MIN_TEMPLATE_SIZE).
+    """
+    candidates = []
+    if PREFERRED_TEMPLATE.exists():
+        candidates.append(PREFERRED_TEMPLATE)
+    # Add all other ticker pages as fallback, sorted by size descending so
+    # we try the most-complete ones first.
+    for f in sorted(TICKERS.glob("*.html"), key=lambda p: p.stat().st_size, reverse=True):
+        if f not in candidates:
+            candidates.append(f)
+    for f in candidates:
+        try:
+            txt = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if len(txt) < MIN_TEMPLATE_SIZE:
+            continue
+        if not SYMBOL_LINE_RE.search(txt):
+            continue
+        if "</html>" not in txt:
+            # truncated — skip
+            continue
+        return f, txt
+    return None, None
+
+
 def main():
-    if not TEMPLATE_FILE.exists():
-        print(f"ERROR: template file missing: {TEMPLATE_FILE}", file=sys.stderr)
+    template_path, template = _find_template()
+    if template is None:
+        print(f"ERROR: no usable template found in {TICKERS}", file=sys.stderr)
         return 1
-    template = TEMPLATE_FILE.read_text(encoding="utf-8")
+    if template_path != PREFERRED_TEMPLATE:
+        print(f"WARN: preferred template {PREFERRED_TEMPLATE.name} missing/invalid — using {template_path.name} as template instead")
+        # Auto-restore AAPL.html from the fallback template so future runs
+        # find the canonical file. Substitute SYMBOL to AAPL.
+        restored = SYMBOL_LINE_RE.sub('const SYMBOL = "AAPL";', template, count=1)
+        PREFERRED_TEMPLATE.write_text(restored, encoding="utf-8")
+        print(f"  → auto-restored {PREFERRED_TEMPLATE.name} from {template_path.name}")
     m = SYMBOL_LINE_RE.search(template)
     if not m:
         print(f"ERROR: template has no `const SYMBOL = \"...\";` line to substitute.",
@@ -42,7 +83,7 @@ def main():
 
     data = _load_dataset()
     symbols = [t["symbol"] for t in data.get("tickers", []) if t.get("symbol")]
-    print(f"Generating {len(symbols)} ticker pages from template ({TEMPLATE_FILE.name})...")
+    print(f"Generating {len(symbols)} ticker pages from template ({template_path.name})...")
 
     TICKERS.mkdir(exist_ok=True)
     keep = set()
@@ -57,19 +98,19 @@ def main():
         keep.add(out.name)
 
     # Clean up stale .html files for symbols no longer in top-N.
-    # BUT always preserve the template file (TEMPLATE_FILE.name) — it's the
-    # source for gen_ticker_pages.py itself on subsequent runs. If AAPL drops
-    # out of top-50, we want AAPL.html to remain (as template) but display
-    # a "not in top-50 anymore" state.
-    template_name = TEMPLATE_FILE.name
+    # BUT always preserve BOTH:
+    #   - the preferred template (ticker/AAPL.html) so future runs have a canonical
+    #     source even if AAPL rotates out of top-50
+    #   - the actual template we used this run (in case it differs from preferred)
+    preserved = {PREFERRED_TEMPLATE.name, template_path.name}
     removed = 0
     for f in TICKERS.glob("*.html"):
-        if f.name == template_name:
+        if f.name in preserved:
             continue  # never delete the template
         if f.name not in keep:
             f.unlink()
             removed += 1
-    print(f"Wrote {len(symbols)} pages; removed {removed} stale pages (template {template_name} preserved).")
+    print(f"Wrote {len(symbols)} pages; removed {removed} stale pages (preserved template(s): {sorted(preserved)}).")
     return 0
 
 
