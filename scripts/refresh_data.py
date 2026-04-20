@@ -141,4 +141,37 @@ def _regen_summary(data: dict) -> None:
     s["avg_dip_score"] = round(sum(scores) / len(scores)) if scores else 0
     s["high_conviction_count"] = sum(1 for sc in scores if sc >= 75)
     rsis = [t.get("tech", {}).get("rsi_14") for t in tickers]
-    s["rsi_oversold_count"] = sum(1 for r in rsis if r is not None and r < 35
+    s["rsi_oversold_count"] = sum(1 for r in rsis if r is not None and r < 35)
+    s["near_support_count"] = sum(
+        1 for t in tickers
+        if t.get("price") and t.get("tech", {}).get("support")
+        and abs(t["price"] - t["tech"]["support"]) / t["price"] < 0.03
+    )
+    discounts = [t.get("val", {}).get("discount_to_fv_pct") for t in tickers]
+    discounts = [d for d in discounts if d is not None]
+    if discounts:
+        s["fair_value_discount_avg_pct"] = round(sum(discounts) / len(discounts), 1)
+
+
+def main():
+    data = _load_current()
+
+    ok = False
+    if BIGDATA_KEY:
+        ok = refresh_via_bigdata(data)
+    if not ok and FMP_KEY:
+        ok = refresh_via_fmp(data)
+
+    if not ok:
+        print("No API key configured — bumping timestamp only.")
+        print("Add BIGDATA_API_KEY or FMP_API_KEY as repo secrets to enable refresh.")
+    else:
+        _regen_summary(data)
+
+    _save(data)
+    print(f"Wrote {DATASET} ({DATASET.stat().st_size} bytes) · as_of={data.get('as_of')}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
