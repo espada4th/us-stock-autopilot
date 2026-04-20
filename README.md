@@ -1,21 +1,38 @@
-# US Stock Autopilot — GitHub Pages Deploy
+# Buy-the-Dip Scanner — GitHub Pages Deploy
 
-Static dashboard สำหรับ track 13 US tickers + 11 sector ETFs.
-Deploy ฟรีบน GitHub Pages, refresh ข้อมูลอัตโนมัติด้วย GitHub Actions ทุกชั่วโมงในช่วง US market hours.
+Static dashboard สแกน **50 tickers จาก S&P 1500** หาหุ้นที่ย่อลงแต่มี setup ดี (pullback + RSI oversold + MACD bullish cross + fair-value discount + near-support).
+Deploy ฟรีบน GitHub Pages, refresh ราคาทุกชั่วโมงในช่วง US market hours ผ่าน GitHub Actions.
 
 ## โครงสร้างไฟล์
 
 ```
-gh-pages-deploy/
-├── index.html              ← หน้า dashboard (โหลด dataset.json ตอนเปิดเว็บ)
-├── dataset.json            ← ข้อมูล tickers + market snapshot
+(repo root)/
+├── index.html              ← หน้า screener หลัก (table 50 rows, filter chips, sortable)
+├── dataset.json            ← ข้อมูล v2: tickers + technical + valuation + narrative
+├── ticker/
+│   ├── AAPL.html           ← per-ticker detail page
+│   ├── CRM.html            (Morningstar-style valuation + tech readings + Thai narrative)
+│   └── …                   (รวม 50 ไฟล์)
 ├── scripts/
-│   └── refresh_data.py     ← script ที่ GitHub Actions รันเพื่ออัพเดต dataset.json
+│   └── refresh_data.py     ← GitHub Actions รันเพื่ออัพเดต price/high/low ใน dataset.json
 ├── .github/workflows/
 │   ├── pages.yml           ← deploy ไป GitHub Pages ทุกครั้งที่ push main
 │   └── refresh.yml         ← refresh ข้อมูลทุกชั่วโมง (cron + manual)
 └── README.md
 ```
+
+## Features
+
+- **Screener table** — sort ได้ทุก column (Dip Score, Pullback, RSI, FV Discount, Earn-in-Xd…)
+- **Filter chips** — High Conviction / Deep Value / Oversold Recovery / Near Support / Earnings ≤14d / Wide Moat / By Sector
+- **Per-ticker page** — คลิก row → ไปหน้า detail ที่มี:
+  - Dip Score (0-100 composite) + signal chips
+  - Suggested Entry Zone (entry low/high, stop-loss, target 1 resistance, target 2 fair value, R/R ratio)
+  - Morningstar-style valuation (fair value, star rating 1-5, moat, uncertainty, financial health, analyst consensus/targets)
+  - Technical readings (Trend, RSI, MACD, EMA 20/50, Bollinger, 5D avg, ATR, support/resistance, 52W range bar)
+  - Fundamentals (PE TTM/Fwd, PEG, EV/EBITDA, growth, margins, ROE, D/E, dividend)
+  - Catalysts (earnings date, sentiment, key catalysts ภาษาไทย)
+  - **Thai narrative** — headline, summary, why-now bullets, risks, thesis_short
 
 ## ขั้นตอน Deploy (ครั้งแรก)
 
