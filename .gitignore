@@ -16,3 +16,6 @@ env/
 # Env files
 .env
 .env.local
+
+# Local test runner (may contain API keys - never commit)
+local-test.cmd
