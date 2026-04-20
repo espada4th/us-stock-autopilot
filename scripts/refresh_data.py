@@ -267,6 +267,147 @@ def compute_tech(df):
     }
 
 
+def _pct_slope(series, days):
+    """Percent change of a pandas Series over N trading days ago. None if insufficient."""
+    try:
+        if len(series) < days + 1:
+            return None
+        v0 = float(series.iloc[-days-1])
+        v1 = float(series.iloc[-1])
+        if v0 == 0:
+            return None
+        return 100 * (v1 - v0) / v0
+    except Exception:
+        return None
+
+
+def compute_momentum_score(df, tech_pack):
+    """Momentum composite 0-35 from trend + RSI-slope + short/mid return + structure + vol.
+
+    Measures whether price is *starting to turn up*, not whether it has
+    already rallied. Designed to pair with dip_score so we filter out
+    falling-knife setups (dip is deep but price still sliding).
+
+    Signals (sum to ~35 pts):
+      1. Price > EMA20          (5 pts)   — short-term trend flipped up
+      2. EMA20 > EMA50          (5 pts)   — bullish stack (short over mid)
+      3. RSI rising from OS     (7 pts)   — was oversold recently, now recovering
+      4. 5-day return > 0       (5 pts)   — short-term momentum positive
+      5. Higher low structure   (5 pts)   — last 5d low > prior 10d low
+      6. Accumulation volume    (4 pts)   — up-day vol > down-day vol (last 10d)
+      7. Relative strength      (4 pts)   — 20d return > SPY 20d (placeholder: >0 bonus)
+    """
+    if df is None or tech_pack is None:
+        return 0, []
+
+    try:
+        import pandas as pd
+    except Exception:
+        return 0, []
+
+    close = df["Close"].astype(float) if "Close" in df else None
+    low   = df["Low"].astype(float)   if "Low"   in df else None
+    vol   = df["Volume"].astype(float) if "Volume" in df else None
+    if close is None or len(close) < 30:
+        return 0, []
+
+    pts = 0
+    signals = []
+    tech = tech_pack.get("tech", {}) or {}
+    price = tech_pack.get("price")
+    ema20 = tech.get("ema_20")
+    ema50 = tech.get("ema_50")
+
+    # 1) Price > EMA20
+    if price is not None and ema20 is not None and price > ema20:
+        pts += 5
+        signals.append("PX>EMA20")
+
+    # 2) EMA20 > EMA50 (bullish stack)
+    if ema20 is not None and ema50 is not None and ema20 > ema50:
+        pts += 5
+        signals.append("EMA STACK")
+
+    # 3) RSI rising from oversold: RSI(now) > RSI(3d ago) AND RSI touched <=40 in last 10d
+    try:
+        rsi_series = _rsi(close, 14).dropna()
+        if len(rsi_series) >= 5:
+            rsi_now = float(rsi_series.iloc[-1])
+            rsi_3ago = float(rsi_series.iloc[-4])
+            rsi_10min = float(rsi_series.tail(10).min())
+            if rsi_now > rsi_3ago and rsi_10min <= 40:
+                pts += 7
+                signals.append("RSI TURNING UP")
+            elif rsi_now > rsi_3ago and rsi_10min <= 50:
+                pts += 4  # partial credit — not quite OS but recovering
+    except Exception:
+        pass
+
+    # 4) 5-day return > 0
+    r5 = _pct_slope(close, 5)
+    if r5 is not None and r5 > 0:
+        pts += 5
+        if r5 >= 3:
+            signals.append(f"5D +{r5:.1f}%")
+
+    # 5) Higher low structure: min(last 5) > min(prior 10)
+    try:
+        if low is not None and len(low) >= 20:
+            recent_lo = float(low.tail(5).min())
+            prior_lo  = float(low.iloc[-15:-5].min())
+            if recent_lo > prior_lo:
+                pts += 5
+                signals.append("HIGHER LOW")
+    except Exception:
+        pass
+
+    # 6) Accumulation: volume on up-days > volume on down-days (last 10d)
+    try:
+        if vol is not None and len(vol) >= 11:
+            cs = close.tail(11)
+            vs = vol.tail(10)
+            up_vol = 0.0; dn_vol = 0.0
+            for i in range(10):
+                # cs[i+1] vs cs[i]: close today vs yesterday
+                if float(cs.iloc[i+1]) > float(cs.iloc[i]):
+                    up_vol += float(vs.iloc[i])
+                elif float(cs.iloc[i+1]) < float(cs.iloc[i]):
+                    dn_vol += float(vs.iloc[i])
+            if up_vol > dn_vol * 1.2:
+                pts += 4
+                signals.append("ACCUMULATION")
+    except Exception:
+        pass
+
+    # 7) Relative strength: 20d return positive (simple proxy — full RS vs SPY needs SPY history)
+    r20 = _pct_slope(close, 20)
+    if r20 is not None and r20 > 0:
+        pts += 4
+        if r20 >= 5:
+            signals.append(f"20D +{r20:.1f}%")
+
+    return int(round(pts)), signals[:6]
+
+
+def rotation_flag(dip, mom):
+    """Tag the ticker so the UI can colour-code setup quality.
+
+    - setup_ready   : dip>=50 AND momentum>=15  → both signals align, actionable
+    - wait_confirm  : dip>=50 AND momentum<15   → oversold but no reversal yet
+    - falling_knife : dip>=65 AND momentum<5    → deep dip + still sliding = avoid
+    - meh           : everything else
+    """
+    d = dip or 0
+    m = mom or 0
+    if d >= 65 and m < 5:
+        return "falling_knife"
+    if d >= 50 and m >= 15:
+        return "setup_ready"
+    if d >= 50 and m < 15:
+        return "wait_confirm"
+    return "meh"
+
+
 def compute_dip_score(t):
     """Composite 0-100 dip score from price-based signals."""
     pts = 0
@@ -657,6 +798,13 @@ def main():
         score, signals = compute_dip_score(t)
         t["dip_score"] = score
         t["dip_signals"] = signals
+
+        # Momentum score 0-35 — is price starting to turn up? Filters knives.
+        mom_score, mom_signals = compute_momentum_score(df, tech_pack)
+        t["momentum_score"] = mom_score
+        t["momentum_signals"] = mom_signals
+        t["rotation_flag"]    = rotation_flag(score, mom_score)
+
         t["entry"] = make_entry_zone(t)
 
         # Star rating: manual overlay wins; else auto-derive from dip_score so
@@ -687,8 +835,19 @@ def main():
 
         candidates.append(t)
 
+    # Sort by dip_score first, then drop "falling knife" candidates:
+    # dip is deep but momentum is near zero → still sliding. Except watchlist,
+    # which is always force-included.
     candidates.sort(key=lambda x: x.get("dip_score", 0), reverse=True)
-    top = candidates[:TOP_N]
+    MOMENTUM_MIN = 10
+    filtered = [
+        c for c in candidates
+        if c.get("on_watchlist") or (c.get("momentum_score", 0) >= MOMENTUM_MIN)
+    ]
+    dropped = len(candidates) - len(filtered)
+    top = filtered[:TOP_N]
+    print(f"Momentum filter: dropped {dropped} tickers with momentum<{MOMENTUM_MIN} "
+          f"(likely falling knives)")
 
     # Force-include watchlist symbols even if outside top-N (append, keep sort).
     top_syms = {t["symbol"] for t in top}
@@ -697,6 +856,33 @@ def main():
         print(f"Force-including {len(forced)} watchlist symbols "
               f"({', '.join(c['symbol'] for c in forced)}) below top-{TOP_N}")
         top.extend(forced)
+
+    # ---- Change tracking: compare vs previous dataset for badges (new / rank_up / rank_down) ----
+    prev_rank = {}
+    if DATASET.exists():
+        try:
+            prev_data = json.loads(DATASET.read_text(encoding="utf-8"))
+            for i, pt in enumerate(prev_data.get("tickers", [])):
+                if pt.get("symbol"):
+                    prev_rank[pt["symbol"]] = i + 1   # 1-indexed rank
+        except Exception as e:
+            print(f"WARN: failed to load prev dataset for change tracking: {e}")
+
+    for i, t in enumerate(top):
+        new_rank = i + 1
+        sym = t["symbol"]
+        old = prev_rank.get(sym)
+        if old is None:
+            t["delta"] = {"status": "new", "prev_rank": None, "rank_change": None}
+        else:
+            change = old - new_rank  # positive = moved up
+            if change >= 3:
+                status = "rank_up"
+            elif change <= -3:
+                status = "rank_down"
+            else:
+                status = "stable"
+            t["delta"] = {"status": status, "prev_rank": old, "rank_change": change}
 
     print(f"Top dip scores: " + ", ".join(f"{t['symbol']}={t['dip_score']}" for t in top[:10]) + " ...")
 
@@ -737,17 +923,22 @@ def main():
 
     # Summary
     scores = [t["dip_score"] for t in top]
+    moms   = [t.get("momentum_score", 0) for t in top]
     rsis = [t.get("tech", {}).get("rsi_14") for t in top]
     summary = {
         "total_tickers": len(top),
         "avg_dip_score": round(sum(scores) / len(scores)) if scores else 0,
+        "avg_momentum_score": round(sum(moms) / len(moms)) if moms else 0,
         "high_conviction_count": sum(1 for s in scores if s >= 75),
+        "setup_ready_count":   sum(1 for t in top if t.get("rotation_flag") == "setup_ready"),
+        "wait_confirm_count":  sum(1 for t in top if t.get("rotation_flag") == "wait_confirm"),
         "rsi_oversold_count": sum(1 for r in rsis if r is not None and r < 35),
         "near_support_count": sum(
             1 for t in top
             if t.get("price") and t.get("tech", {}).get("support")
             and abs(t["price"] - t["tech"]["support"]) / t["price"] < 0.03
         ),
+        "new_entries_count":   sum(1 for t in top if t.get("delta", {}).get("status") == "new"),
         "scanner_universe_size": len(syms),
         "watchlist_count":       added_watch,
         "finnhub_enabled":       bool(FINNHUB_API_KEY),

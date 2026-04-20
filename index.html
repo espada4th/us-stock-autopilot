@@ -131,6 +131,38 @@
   .dip-badge.s50 { background:rgba(245,196,81,0.14); color:var(--yellow); }
   .dip-badge.s0  { background:var(--panel-2); color:var(--muted); }
 
+  /* Momentum (0-35) mini-badge */
+  .mom-badge {
+    display:inline-block; min-width:30px; text-align:center;
+    padding:2px 6px; border-radius:5px; font-size:11px;
+    font-weight:700; font-family:'JetBrains Mono',monospace;
+  }
+  .mom-badge.m25 { background:rgba(34,211,160,0.18); color:var(--green); }
+  .mom-badge.m15 { background:rgba(91,155,255,0.18); color:var(--blue); }
+  .mom-badge.m10 { background:rgba(245,196,81,0.14); color:var(--yellow); }
+  .mom-badge.m0  { background:rgba(255,90,106,0.14); color:var(--red); }
+
+  /* Rotation flag pill (setup quality) */
+  .rot {
+    display:inline-block; padding:1px 6px; border-radius:4px;
+    font-size:10px; font-weight:700; letter-spacing:0.03em;
+    margin-left:4px; vertical-align:middle;
+  }
+  .rot.setup_ready  { background:rgba(34,211,160,0.22);  color:var(--green); }
+  .rot.wait_confirm { background:rgba(245,196,81,0.18);  color:var(--yellow); }
+  .rot.falling_knife{ background:rgba(255,90,106,0.2);   color:var(--red); }
+
+  /* Delta/change badge on Ticker column */
+  .delta {
+    display:inline-block; padding:1px 5px; border-radius:4px;
+    font-size:10px; font-weight:700; margin-left:6px;
+    font-family:'JetBrains Mono',monospace; vertical-align:middle;
+  }
+  .delta.new       { background:rgba(167,139,250,0.2);  color:var(--purple); }
+  .delta.rank_up   { background:rgba(34,211,160,0.18);  color:var(--green); }
+  .delta.rank_down { background:rgba(255,90,106,0.16);  color:var(--red); }
+  .delta.stable    { display:none; }
+
   .rsi-pill {
     display:inline-block; padding:2px 7px; border-radius:4px;
     font-size:11px; font-family:'JetBrains Mono',monospace; font-weight:600;
@@ -218,6 +250,7 @@
           <th data-k="pullback_from_high_pct" class="num">Pullback <span class="arrow">↕</span></th>
           <th data-k="rsi" class="num col-hide-sm">RSI <span class="arrow">↕</span></th>
           <th data-k="dip_score" class="num sorted">Dip Score <span class="arrow">↓</span></th>
+          <th data-k="momentum_score" class="num">Momentum <span class="arrow">↕</span></th>
           <th data-k="discount_to_fv_pct" class="num col-hide-md">FV Disc <span class="arrow">↕</span></th>
           <th data-k="star_rating" class="num col-hide-md">★</th>
           <th data-k="days_to_earn" class="num col-hide-md">Earn in <span class="arrow">↕</span></th>
@@ -257,6 +290,26 @@ function dipClass(n) {
   if (n >= 65) return 's65';
   if (n >= 50) return 's50';
   return 's0';
+}
+function momClass(n) {
+  if (n == null) return 'm0';
+  if (n >= 25) return 'm25';
+  if (n >= 15) return 'm15';
+  if (n >= 10) return 'm10';
+  return 'm0';
+}
+function rotLabel(r) {
+  if (r === 'setup_ready')   return '🎯 READY';
+  if (r === 'wait_confirm')  return '⏳ WAIT';
+  if (r === 'falling_knife') return '🔪 KNIFE';
+  return '';
+}
+function deltaBadge(d) {
+  if (!d || d.status === 'stable') return '';
+  if (d.status === 'new')       return '<span class="delta new" title="New entry">NEW</span>';
+  if (d.status === 'rank_up')   return '<span class="delta rank_up" title="Moved up ' + d.rank_change + '">↑' + d.rank_change + '</span>';
+  if (d.status === 'rank_down') return '<span class="delta rank_down" title="Moved down ' + Math.abs(d.rank_change) + '">↓' + Math.abs(d.rank_change) + '</span>';
+  return '';
 }
 function rsiClass(r) {
   if (r == null) return 'mid';
@@ -334,10 +387,10 @@ function buildKPIs() {
   const fvdStr = (fvd != null && !isNaN(fvd)) ? fvd.toFixed(1) + '%' : '—';
   const rows = [
     ['Universe', s.total_tickers || 0, 'tickers'],
+    ['Setup Ready 🎯', s.setup_ready_count || 0, 'dip+momentum'],
+    ['New Today 🆕', s.new_entries_count || 0, 'entered list'],
     ['Avg Dip Score', s.avg_dip_score || 0, '/100'],
-    ['High Conviction', s.high_conviction_count || 0, 'Score>=75'],
-    ['Near Support', s.near_support_count || 0, 'dist<3%'],
-    ['RSI Oversold', s.rsi_oversold_count || 0, 'RSI<35'],
+    ['Avg Momentum', s.avg_momentum_score || 0, '/35'],
     ['Avg FV Discount', fvdStr, 'vs Fair Value'],
   ];
   const html = rows.map(function(r){
@@ -351,6 +404,8 @@ function buildFilters() {
   const sectors = Array.from(new Set(all.map(function(t){return t.sector;}))).sort();
   const chips = [
     { id:'all', label:'All', fn: function(t){return true;} },
+    { id:'setup_ready', label:'🎯 Setup Ready', fn: function(t){return t.rotation_flag === 'setup_ready';} },
+    { id:'new_today', label:'🆕 New Today', fn: function(t){return t.delta && t.delta.status === 'new';} },
     { id:'high_conv', label:'High Conviction', fn: function(t){return t.dip_score >= 75;} },
     { id:'deep_value', label:'Deep Value', fn: function(t){return t.val && t.val.discount_to_fv_pct > 15;} },
     { id:'oversold', label:'Oversold Recovery', fn: function(t){return t.tech && t.tech.rsi_14 < 40 && t.tech.macd_signal === 'bullish_cross';} },
@@ -388,6 +443,8 @@ function getFiltered() {
   const all = DATA.tickers.slice();
   const filters = {
     all: function(t){return true;},
+    setup_ready: function(t){return t.rotation_flag === 'setup_ready';},
+    new_today: function(t){return t.delta && t.delta.status === 'new';},
     high_conv: function(t){return t.dip_score >= 75;},
     deep_value: function(t){return t.val && t.val.discount_to_fv_pct > 15;},
     oversold: function(t){return t.tech && t.tech.rsi_14 < 40 && t.tech.macd_signal === 'bullish_cross';},
@@ -426,7 +483,7 @@ function renderTable() {
   const rows = sortRows(getFiltered());
   const tbody = document.getElementById('tbody');
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="14" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="15" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>';
   } else {
     tbody.innerHTML = rows.map(function(t){
       const dc = dipClass(t.dip_score);
@@ -443,15 +500,21 @@ function renderTable() {
       const entryHi = t.entry ? t.entry.entry_high : null;
       const entryTxt = (entryLo != null && entryHi != null) ? ('$' + entryLo.toFixed(0) + '-$' + entryHi.toFixed(0)) : '—';
       const closes = t.history ? t.history.closes : [];
+      const mom = t.momentum_score != null ? t.momentum_score : 0;
+      const mc = momClass(mom);
+      const rot = t.rotation_flag || '';
+      const rotHtml = rot && rot !== 'meh' ? '<span class="rot ' + rot + '">' + rotLabel(rot) + '</span>' : '';
+      const delta = deltaBadge(t.delta);
       return '<tr onclick="location.href=\'ticker/' + t.symbol + '.html\'">' +
-        '<td><div class="sym">' + t.symbol + '</div><div class="sym-name">' + t.name + '</div></td>' +
+        '<td><div class="sym">' + t.symbol + delta + '</div><div class="sym-name">' + t.name + '</div></td>' +
         '<td class="col-hide-md"><span class="sector-tag">' + t.sector + '</span></td>' +
         '<td class="num">' + fmtPrice(t.price) + '</td>' +
         '<td class="num ' + pctCls(t.change_d1_pct) + '">' + fmtPct(t.change_d1_pct) + '</td>' +
         '<td class="num col-hide-sm ' + pctCls(t.change_1m_pct) + '">' + fmtPct(t.change_1m_pct) + '</td>' +
         '<td class="num ' + pctCls(t.pullback_from_high_pct) + '">' + fmtPct(t.pullback_from_high_pct) + '</td>' +
         '<td class="num col-hide-sm"><span class="rsi-pill ' + rc + '">' + fmtNum(rsi, 0) + '</span></td>' +
-        '<td class="num"><span class="dip-badge ' + dc + '">' + t.dip_score + '</span></td>' +
+        '<td class="num"><span class="dip-badge ' + dc + '">' + t.dip_score + '</span>' + rotHtml + '</td>' +
+        '<td class="num"><span class="mom-badge ' + mc + '">' + mom + '</span></td>' +
         '<td class="num col-hide-md ' + (fvd != null && fvd > 0 ? 'pos' : 'neg') + '">' + fmtPct(fvd) + '</td>' +
         '<td class="num col-hide-md">' + stars(star) + '</td>' +
         '<td class="num col-hide-md ' + earnCls + '">' + earn + '</td>' +

@@ -2,14 +2,36 @@ name: Refresh dashboard data
 
 on:
   schedule:
-    # Hourly between Monday 08:00 Thai time → Saturday 08:00 Thai time (UTC+7).
-    # Window: Mon 01:00 UTC → Sat 01:00 UTC (continuous, ~120 hourly runs/week).
+    # Smart hourly window aligned with US market activity + Thai-time sleep cycle.
+    # Schedule in Thailand time (UTC+7):
+    #   Monday: FULL 24 hours (catches weekend news + Monday open)
+    #   Tue-Fri: 15:00 (pre-market US) → next day 09:00 (covers full US session)
+    #   Sat: last cycle ends at 09:00 Thai (run Fri 15:00 → Sat 09:00)
+    #   Sun: dark (market closed, no news cycle worth refreshing for)
     #
-    # GitHub Actions only supports POSIX cron (no minute ranges across days),
-    # so we split the window into 3 schedules:
-    - cron: "0 1-23 * * 1"     # Mon 01:00-23:00 UTC  (Mon 08:00 Thai → Tue 06:00 Thai)
-    - cron: "0 * * * 2-5"      # Tue-Fri all 24 hours
-    - cron: "0 0-1 * * 6"      # Sat 00:00-01:00 UTC  (Sat 07:00-08:00 Thai)
+    # GitHub Actions cron runs in UTC, so we convert:
+    #   Mon Thai 00:00-23:59  =  Sun UTC 17:00 → Mon UTC 16:59
+    #   Tue Thai 15:00 → Wed Thai 09:00  =  Tue UTC 08:00 → Wed UTC 02:00
+    #   (same shape for Wed→Thu, Thu→Fri, Fri→Sat)
+    #
+    # POSIX cron can't span a day/week boundary in one line, so we split.
+    #
+    # --- Monday Thai (full 24h) ---
+    - cron: "0 17-23 * * 0"    # Sun UTC 17-23  =  Mon Thai 00-06
+    - cron: "0 0-16 * * 1"     # Mon UTC 00-16  =  Mon Thai 07-23
+    # --- Tuesday 15:00 → Wednesday 09:00 Thai ---
+    - cron: "0 8-23 * * 2"     # Tue UTC 08-23  =  Tue Thai 15 → Wed Thai 06
+    - cron: "0 0-2 * * 3"      # Wed UTC 00-02  =  Wed Thai 07-09
+    # --- Wednesday 15:00 → Thursday 09:00 Thai ---
+    - cron: "0 8-23 * * 3"     # Wed UTC 08-23
+    - cron: "0 0-2 * * 4"      # Thu UTC 00-02
+    # --- Thursday 15:00 → Friday 09:00 Thai ---
+    - cron: "0 8-23 * * 4"     # Thu UTC 08-23
+    - cron: "0 0-2 * * 5"      # Fri UTC 00-02
+    # --- Friday 15:00 → Saturday 09:00 Thai ---
+    - cron: "0 8-23 * * 5"     # Fri UTC 08-23
+    - cron: "0 0-2 * * 6"      # Sat UTC 00-02
+    # Total: 100 runs/week (vs ~120 in the old always-on window).
   workflow_dispatch: {}        # manual trigger button
 
 permissions:

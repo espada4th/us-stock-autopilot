@@ -13,13 +13,14 @@ git add narratives_manual.json
 git add watchlist.json
 git add .github/workflows/refresh.yml
 git add .github/workflows/pages.yml
+git add index.html
 git add ticker/AAPL.html
 git add docs/finnhub-setup.md
 git add push-only.cmd
 git add .gitignore
 
 echo [3/5] Creating commit (skip if nothing to commit)...
-git commit -m "chore: scanner infra + watchlist + Finnhub updates" 2>nul
+git commit -m "feat: momentum score + rotation flag + change badges + smart cron" 2>nul
 
 echo [4/5] Stashing any remaining unstaged changes (safety net for rebase)...
 git stash push -u -m "auto-stash-by-push-only" 2>nul

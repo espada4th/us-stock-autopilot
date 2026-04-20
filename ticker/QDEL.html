@@ -142,6 +142,48 @@
   .card h2.tech::before { background:var(--orange); }
   .card h2.fund::before { background:var(--green); }
   .card h2.cat::before { background:var(--yellow); }
+  .card h2.news::before { background:var(--blue); }
+  .card h2.ins::before { background:var(--purple); }
+  .card h2 .src-tag {
+    margin-left:auto; font-size:9px; padding:2px 7px; border-radius:4px;
+    background:var(--panel-2); color:var(--muted); border:1px solid var(--line);
+    font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
+  }
+
+  /* News feed */
+  .news-list { display:flex; flex-direction:column; gap:10px; }
+  .news-item {
+    padding:10px 0; border-bottom:1px dashed var(--line);
+    display:flex; flex-direction:column; gap:4px;
+  }
+  .news-item:last-child { border-bottom:none; padding-bottom:0; }
+  .news-item .hl { font-size:13px; font-weight:600; color:var(--text); line-height:1.4; }
+  .news-item .hl a { color:var(--text); }
+  .news-item .hl a:hover { color:var(--blue); text-decoration:underline; }
+  .news-item .meta { font-size:11px; color:var(--sub); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .news-item .meta .src { color:var(--muted); font-weight:600; }
+  .news-item .meta .ts { font-family:'JetBrains Mono',monospace; }
+  .news-item .sum { font-size:12px; color:var(--muted); line-height:1.5; margin-top:2px; }
+
+  /* Insider */
+  .ins-summary {
+    display:flex; gap:14px; margin-bottom:10px; padding:10px 0;
+    border-bottom:1px dashed var(--line);
+  }
+  .ins-pill {
+    flex:1; text-align:center; padding:8px;
+    background:var(--panel-2); border-radius:8px; border:1px solid var(--line);
+  }
+  .ins-pill .label { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; }
+  .ins-pill .val { font-size:17px; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:3px; }
+  .ins-pill.buy .val { color:var(--green); }
+  .ins-pill.sell .val { color:var(--red); }
+  .ins-row { display:flex; justify-content:space-between; padding:6px 0; font-size:12px; border-bottom:1px dashed var(--line); }
+  .ins-row:last-child { border-bottom:none; }
+  .ins-row .who { color:var(--text); max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ins-row .amt { font-family:'JetBrains Mono',monospace; font-weight:600; }
+  .ins-row .amt.buy { color:var(--green); }
+  .ins-row .amt.sell { color:var(--red); }
 
   /* Metric list */
   .mrow { display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px dashed var(--line); font-size:13px; }
@@ -488,9 +530,9 @@ function renderValuation(t) {
         <div class="sub ${discCls}">${disc==null?'—':fmtPct(disc)+' vs price'}</div>
       </div>
       <div class="val-big">
-        <div class="l">Star Rating</div>
+        <div class="l">Star Rating${v.rating_source === 'auto_dip' ? ' <span class="src-tag" style="font-size:8px; margin-left:4px;">AUTO</span>' : ''}</div>
         <div class="v">${stars(v.star_rating)}</div>
-        <div class="sub">${v.moat ? `<span class="${moatCls(v.moat)}">${esc(v.moat)} Moat</span>` : ''}</div>
+        <div class="sub">${v.moat ? `<span class="${moatCls(v.moat)}">${esc(v.moat)} Moat</span>` : (v.rating_source === 'auto_dip' ? '<span class="neu">derived from dip score</span>' : '')}</div>
       </div>
     </div>
     ${rows}
@@ -569,6 +611,73 @@ function renderCatalysts(t) {
   </div>`;
 }
 
+function renderNews(t) {
+  const items = Array.isArray(t.news) ? t.news : [];
+  if (!items.length) return '';
+  const fmtTs = (epoch) => {
+    if (!epoch) return '';
+    try {
+      const d = new Date(epoch * 1000);
+      const mo = String(d.getMonth()+1).padStart(2,'0');
+      const da = String(d.getDate()).padStart(2,'0');
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mi = String(d.getMinutes()).padStart(2,'0');
+      return `${d.getFullYear()}-${mo}-${da} ${hh}:${mi}`;
+    } catch(e) { return ''; }
+  };
+  const rows = items.slice(0, 5).map(n => {
+    const hl = n.url
+      ? `<a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">${esc(n.headline)}</a>`
+      : esc(n.headline);
+    return `<div class="news-item">
+      <div class="hl">${hl}</div>
+      <div class="meta">
+        ${n.source ? `<span class="src">${esc(n.source)}</span>` : ''}
+        ${n.datetime ? `<span class="ts">${esc(fmtTs(n.datetime))}</span>` : ''}
+      </div>
+      ${n.summary ? `<div class="sum">${esc(n.summary)}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `
+  <div class="card">
+    <h2 class="news">News <span class="src-tag">Finnhub · 7d</span></h2>
+    <div class="news-list">${rows}</div>
+  </div>`;
+}
+
+function renderInsider(t) {
+  const ins = t.insider;
+  if (!ins) return '';
+  const fmtShares = (n) => {
+    if (n == null) return '—';
+    const v = Number(n);
+    if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + 'M';
+    if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'K';
+    return String(Math.round(v));
+  };
+  const top = Array.isArray(ins.top) ? ins.top : [];
+  const rows = top.slice(0, 5).map(r => {
+    const n = r.share_change || 0;
+    const cls = n > 0 ? 'buy' : (n < 0 ? 'sell' : '');
+    const sign = n > 0 ? '+' : '';
+    return `<div class="ins-row">
+      <span class="who">${esc(r.name || '—')}${r.date ? ` · <span class="neu">${esc(r.date)}</span>` : ''}</span>
+      <span class="amt ${cls}">${sign}${fmtShares(n)}</span>
+    </div>`;
+  }).join('');
+  const netCls = ins.net_shares > 0 ? 'buy' : (ins.net_shares < 0 ? 'sell' : '');
+  return `
+  <div class="card">
+    <h2 class="ins">Insider Activity <span class="src-tag">${ins.window_days||30}d</span></h2>
+    <div class="ins-summary">
+      <div class="ins-pill buy"><div class="label">Buys</div><div class="val">${ins.buys||0}</div></div>
+      <div class="ins-pill sell"><div class="label">Sells</div><div class="val">${ins.sells||0}</div></div>
+      <div class="ins-pill ${netCls}"><div class="label">Net Shares</div><div class="val">${fmtShares(ins.net_shares)}</div></div>
+    </div>
+    ${rows || '<div class="mrow"><span class="k">No recent transactions</span></div>'}
+  </div>`;
+}
+
 function renderNarrative(t) {
   const n = t.narrative_th;
   if (!n) return '';
@@ -609,6 +718,10 @@ function render(t, asof, generatedAt) {
     '<div class="grid2">',
       renderFundamentals(t),
       renderCatalysts(t),
+    '</div>',
+    '<div class="grid2">',
+      renderNews(t),
+      renderInsider(t),
     '</div>',
     renderNarrative(t),
     `<div class="disc">Data as of ${esc(asof||'—')}. Signals computed from price + volume (yfinance). Fundamentals/valuation shown when available. <strong>Not investment advice.</strong></div>`,
