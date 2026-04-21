@@ -89,6 +89,10 @@
   .tag.hi { color:var(--blue); border-color:rgba(91,155,255,0.3); background:rgba(91,155,255,0.1); }
 
   .hero-price { text-align:right; min-width:180px; }
+  .hero-price .sess { display:inline-block; margin-left:10px; padding:2px 8px; border-radius:5px; font-size:11px; font-weight:700; font-family:'JetBrains Mono',monospace; letter-spacing:0.04em; vertical-align:middle; }
+  .hero-price .sess.pre    { background:rgba(255,196,61,0.20);  color:var(--yellow); }
+  .hero-price .sess.post   { background:rgba(138,92,255,0.20);  color:var(--purple); }
+  .hero-price .sess.closed { background:rgba(148,163,184,0.18); color:var(--muted);  }
   .hero-price .big { font-size:36px; font-weight:800; font-family:'JetBrains Mono',monospace; letter-spacing:-0.02em; }
   .hero-price .chg { font-size:15px; font-weight:600; margin-top:2px; }
   .hero-price .chg span { margin-right:10px; }
@@ -328,6 +332,12 @@ function stars(n) {
 }
 function fmtPct(v, d=1) { if (v==null||isNaN(v)) return '—'; const s = v>0?'+':''; return s + v.toFixed(d) + '%'; }
 function fmtNum(v, d=2) { if (v==null||isNaN(v)) return '—'; return v.toFixed(d); }
+function sessBadge(s){
+  if (\!s || s === 'REG') return '';
+  const label = s === 'PRE' ? 'PRE' : (s === 'POST' ? 'POST' : 'CLOSED');
+  const cls   = s.toLowerCase();
+  return `<span class="sess ${cls}" title="Extended-hours price (US ${label})">${label}</span>`;
+}
 function fmtUSD(v, d=2) { if (v==null||isNaN(v)) return '—'; return '$' + v.toFixed(d); }
 function fmtB(v) { if (v==null||isNaN(v)) return '—'; return v >= 1000 ? (v/1000).toFixed(2)+'T' : v.toFixed(1)+'B'; }
 function pctCls(v) { if (v==null) return 'neu'; return v>0 ? 'pos' : v<0 ? 'neg' : 'neu'; }
@@ -462,7 +472,7 @@ function renderHero(t) {
       </div>
     </div>
     <div class="hero-price">
-      <div class="big">${fmtUSD(t.price)}</div>
+      <div class="big">${fmtUSD(t.price)}${sessBadge(t.session)}</div>
       <div class="chg">
         <span class="${pctCls(t.change_d1_pct)}">${fmtPct(t.change_d1_pct)} 1D</span>
         <span class="${pctCls(t.change_1m_pct)}">${fmtPct(t.change_1m_pct)} 1M</span>
