@@ -499,6 +499,145 @@ def rotation_flag(dip, mom):
     return "meh"
 
 
+def compute_fundamentals_score(t):
+    """Max +10. Reads t['fund_rt'] (Finnhub snapshot metrics). Rewards
+    companies with healthy underlying business so the dip-score isn't
+    only technical.
+
+    +2 GROWTH     revenue TTM YoY > 10%
+    +2 PROFITABLE net profit margin > 10%
+    +2 LOW DEBT   debt-to-equity < 0.5
+    +2 HIGH ROE   ROE TTM > 15%
+    +2 FAIR PE    P/E TTM between 5 and 40
+    """
+    f = t.get("fund_rt") or t.get("fund") or {}
+    if not f:
+        return 0, []
+    pts = 0
+    signals = []
+    rg = f.get("rev_growth_yoy_pct")
+    if rg is None:
+        rg = f.get("revenue_growth_yoy_pct")
+    if rg is not None and rg > 10:
+        pts += 2
+        signals.append("GROWTH")
+    pm = f.get("profit_margin_pct")
+    if pm is None:
+        pm = f.get("operating_margin_pct")
+    if pm is not None and pm > 10:
+        pts += 2
+        signals.append("PROFITABLE")
+    de = f.get("debt_to_equity")
+    if de is None:
+        de = f.get("debt_equity")
+    if de is not None and de < 0.5:
+        pts += 2
+        signals.append("LOW DEBT")
+    roe = f.get("roe_ttm_pct")
+    if roe is None:
+        roe = f.get("roe_pct")
+    if roe is not None and roe > 15:
+        pts += 2
+        signals.append("HIGH ROE")
+    pe = f.get("pe_ttm")
+    if pe is not None and 5 <= pe <= 40:
+        pts += 2
+        signals.append("FAIR PE")
+    pts = max(0, min(10, pts))
+    return int(pts), signals
+
+
+def compute_reversal_score(df, tech_pack, t):
+    """Max +20. Catches tickers in downtrend starting to reverse, or in
+    very early uptrend (first ~10 days). Lets user ride moves without
+    waiting for the pure dip-score to mature.
+
+    Stage filter: must be in downtrend OR early uptrend (flipped up
+    within 10d AND still pulled back >=3% from the 52W high).
+
+    Signals (sum capped to 20):
+      +8 NEW UPTREND  EMA20 > EMA50 AND MACD bull-crossed within 10d
+      +4 RSI REBOUND  RSI hit <=35 in last 10d AND now >=40
+      +3 MACD CROSS   MACD bull-crossed within 5d (separate from above)
+      +2 ABOVE MA20   price > EMA20 while still below EMA50
+      +2 EMA20 UP     EMA20 5d ago -> now >= +0.5%
+      +1 NEAR LOW     pos_52w_pct <= 15
+    """
+    if tech_pack is None or df is None:
+        return 0, []
+    try:
+        import pandas as pd
+    except Exception:
+        return 0, []
+    tech = tech_pack.get("tech", {}) or {}
+    price   = tech_pack.get("price")
+    ema20   = tech.get("ema_20")
+    ema50   = tech.get("ema_50")
+    rsi_now = tech.get("rsi_14")
+    macd_x  = tech.get("macd_cross_days_ago")
+    pos_52w = tech_pack.get("pos_52w_pct")
+    pullback = tech_pack.get("pullback_from_high_pct")
+    if pullback is None:
+        pullback = 0
+
+    in_downtrend = bool(
+        ema50 and price and ema20
+        and price < ema50 and ema20 < ema50
+    )
+    early_uptrend = bool(
+        ema50 and ema20 and ema20 > ema50
+        and macd_x is not None and macd_x <= 10
+        and pullback <= -3
+    )
+    if not (in_downtrend or early_uptrend):
+        return 0, []
+
+    pts = 0
+    signals = []
+    close = df["Close"].astype(float) if "Close" in df else None
+
+    if ema50 and ema20 and ema20 > ema50 and macd_x is not None and macd_x <= 10:
+        pts += 8
+        signals.append("NEW UPTREND")
+
+    try:
+        if close is not None:
+            rsi_series = _rsi(close, 14).dropna()
+            if len(rsi_series) >= 10 and rsi_now is not None:
+                rsi_min_10 = float(rsi_series.tail(10).min())
+                if rsi_min_10 <= 35 and rsi_now >= 40:
+                    pts += 4
+                    signals.append("RSI REBOUND")
+    except Exception:
+        pass
+
+    if macd_x is not None and macd_x <= 5 and "NEW UPTREND" not in signals:
+        pts += 3
+        signals.append("MACD CROSS")
+
+    if price and ema20 and ema50 and price > ema20 and price < ema50:
+        pts += 2
+        signals.append("ABOVE MA20")
+
+    try:
+        if close is not None and len(close) >= 6:
+            ema20_series = close.ewm(span=20, adjust=False).mean()
+            e_now = float(ema20_series.iloc[-1])
+            e_5 = float(ema20_series.iloc[-6])
+            if e_5 > 0 and (e_now - e_5) / e_5 * 100 >= 0.5:
+                pts += 2
+                signals.append("EMA20 UP")
+    except Exception:
+        pass
+
+    if pos_52w is not None and pos_52w <= 15:
+        pts += 1
+        signals.append("NEAR LOW")
+
+    pts = max(0, min(20, pts))
+    return int(pts), signals[:4]
+
+
 def compute_dip_score(t):
     """Composite 0-100 dip score from price-based signals."""
     pts = 0
@@ -1020,6 +1159,19 @@ def main():
         t["momentum_signals"] = mom_signals
         t["rotation_flag"]    = rotation_flag(score, mom_score)
 
+        # Reversal score 0-20 — catches downtrend-ending / early uptrend
+        # so user doesn't have to wait for the pure dip-score to ripen.
+        rev_score, rev_signals = compute_reversal_score(df, tech_pack, t)
+        t["reversal_score"] = rev_score
+        t["reversal_signals"] = rev_signals
+        if rev_score > 0:
+            t["dip_score"] = min(100, int(t.get("dip_score", 0)) + rev_score)
+            existing = list(t.get("dip_signals") or [])
+            for sig in rev_signals:
+                if sig not in existing:
+                    existing.insert(0, sig)
+            t["dip_signals"] = existing[:6]
+
         t["entry"] = make_entry_zone(t)
 
         # Star rating: manual overlay wins; else auto-derive from dip_score so
@@ -1157,6 +1309,19 @@ def main():
                 # Also push analyst target to val if finnhub has it
                 if f_rt.get("pe_forward") and t["val"].get("pe_forward") is None:
                     t["val"]["pe_forward"] = f_rt["pe_forward"]
+
+            # Fundamentals bonus +10 — rewards healthy balance sheet + growth.
+            # Applied here because fund_rt is only populated after Finnhub merge.
+            fund_pts, fund_sigs = compute_fundamentals_score(t)
+            t["fundamentals_score"] = fund_pts
+            t["fundamentals_signals"] = fund_sigs
+            if fund_pts > 0:
+                t["dip_score"] = min(100, int(t.get("dip_score", 0)) + fund_pts)
+                existing = list(t.get("dip_signals") or [])
+                for sig in fund_sigs:
+                    if sig not in existing:
+                        existing.append(sig)
+                t["dip_signals"] = existing[:8]
             enriched += 1
         print(f"Finnhub: enriched {enriched}/{len(top)} tickers with news/insider/fundamentals")
     else:
