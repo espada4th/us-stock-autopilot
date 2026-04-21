@@ -169,7 +169,27 @@
   .card h2.val::before { background:var(--purple); }
   .card h2.tech::before { background:var(--orange); }
   .card h2.fund::before { background:var(--green); }
+  .card h2.rev::before  { background:var(--yellow); }
   .card h2.cat::before { background:var(--yellow); }
+  .fund-score, .rev-score {
+    font-size:11px; color:var(--yellow);
+    background:rgba(253,209,92,0.18);
+    padding:2px 7px; border-radius:4px;
+    margin-left:6px; font-weight:700;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .fund-sigs, .rev-sigs {
+    display:flex; flex-wrap:wrap; gap:5px;
+    margin:6px 0 12px;
+  }
+  .fund-sig, .rev-sig {
+    font-size:10px; padding:2px 7px;
+    border-radius:3px;
+    font-family:'JetBrains Mono',monospace;
+    letter-spacing:0.04em; font-weight:700;
+  }
+  .fund-sig { color:var(--green); background:rgba(34,211,160,0.16); }
+  .rev-sig  { color:var(--yellow); background:rgba(253,209,92,0.18); }
   .card h2.news::before { background:var(--blue); }
   .card h2.ins::before { background:var(--purple); }
   .card h2 .src-tag {
@@ -321,7 +341,7 @@
 
 <script>
 // SYMBOL is injected by generator - replace "AAPL"
-const SYMBOL = "HSTM";
+const SYMBOL = "GEO";
 
 // ===================== formatters =====================
 function stars(n) {
@@ -669,10 +689,42 @@ function renderFundamentals(t) {
     f.debt_equity != null ? `<div class="mrow"><span class="k">Debt / Equity</span><span class="v">${fmtNum(f.debt_equity,2)}</span></div>` : '',
     f.dividend_yield_pct != null ? `<div class="mrow"><span class="k">Dividend Yield</span><span class="v">${fmtPct(f.dividend_yield_pct)}</span></div>` : '',
   ].filter(Boolean).join('');
-  if (!rows) return '';
+  const scoreBadge = (t.fundamentals_score != null)
+    ? `<span class="fund-score" title="Fundamentals bonus applied to dip_score">+${t.fundamentals_score}/10</span>`
+    : '';
+  const sigBadges = Array.isArray(t.fundamentals_signals) && t.fundamentals_signals.length
+    ? `<div class="fund-sigs">${t.fundamentals_signals.map(s => `<span class="fund-sig">${esc(s)}</span>`).join('')}</div>`
+    : '';
+  if (!rows && !scoreBadge && !sigBadges) return '';
   return `
   <div class="card">
-    <h2 class="fund">Fundamentals</h2>
+    <h2 class="fund">Fundamentals ${scoreBadge}</h2>
+    ${sigBadges}
+    ${rows}
+  </div>`;
+}
+
+function renderReversal(t) {
+  if (t.reversal_score == null || t.reversal_score <= 0) return '';
+  const signals = Array.isArray(t.reversal_signals) ? t.reversal_signals : [];
+  const sigHtml = signals.length
+    ? `<div class="rev-sigs">${signals.map(s => `<span class="rev-sig">${esc(s)}</span>`).join('')}</div>`
+    : '';
+  const explain = {
+    'NEW UPTREND': 'EMA20 just crossed EMA50, MACD turned bullish <=10d ago',
+    'RSI REBOUND': 'RSI dropped to <=35 within last 10d and now >=40',
+    'MACD CROSS':  'MACD bull-crossed within last 5d',
+    'ABOVE MA20':  'Price reclaimed EMA20 while still below EMA50',
+    'EMA20 UP':    'EMA20 rising by >=0.5% over last 5 days',
+    'NEAR LOW':    'Within 15% of 52-week low',
+  };
+  const rows = signals.map(s =>
+    `<div class="mrow"><span class="k">${esc(s)}</span><span class="v thai">${esc(explain[s] || '')}</span></div>`
+  ).join('');
+  return `
+  <div class="card">
+    <h2 class="rev">Reversal Signals <span class="rev-score">+${t.reversal_score}/20</span></h2>
+    ${sigHtml}
     ${rows}
   </div>`;
 }
@@ -813,6 +865,7 @@ function render(t, asof, generatedAt) {
       renderFundamentals(t),
       renderCatalysts(t),
     '</div>',
+    renderReversal(t),
     '<div class="grid2">',
       renderNews(t),
       renderInsider(t),
