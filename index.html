@@ -163,7 +163,11 @@
   .delta.rank_down { background:rgba(255,90,106,0.16);  color:var(--red); }
   .delta.stable    { display:none; }
 
-  .rsi-pill {
+  .sess{display:inline-block;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;font-family:'JetBrains Mono',monospace;margin-left:6px;letter-spacing:0.04em;vertical-align:middle;}
+    .sess.pre{background:rgba(255,196,61,0.18);color:var(--yellow);}
+    .sess.post{background:rgba(138,92,255,0.18);color:var(--purple);}
+    .sess.closed{background:rgba(148,163,184,0.18);color:var(--muted);}
+    .rsi-pill {
     display:inline-block; padding:2px 7px; border-radius:4px;
     font-size:11px; font-family:'JetBrains Mono',monospace; font-weight:600;
   }
@@ -277,7 +281,13 @@ function fmtPct(v, digits=1) {
   return s + v.toFixed(digits) + '%';
 }
 function pctCls(v) { if (v == null) return 'neu'; return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu'; }
-function fmtPrice(v) { if (v == null) return '—'; return '$' + v.toFixed(2); }
+function sessBadge(s){
+      if (\!s || s === 'REG') return '';
+      const label = s === 'PRE' ? 'PRE' : (s === 'POST' ? 'POST' : 'CLOSED');
+      const cls   = s.toLowerCase();
+      return '<span class="sess '+cls+'" title="Extended-hours price (US '+label+')">'+label+'</span>';
+    }
+    function fmtPrice(v) { if (v == null) return '—'; return '$' + v.toFixed(2); }
 function fmtNum(v, d=0) { if (v == null) return '—'; return v.toFixed(d); }
 function stars(n) {
   if (!n) return '—';
@@ -508,7 +518,7 @@ function renderTable() {
       return '<tr onclick="location.href=\'ticker/' + t.symbol + '.html\'">' +
         '<td><div class="sym">' + t.symbol + delta + '</div><div class="sym-name">' + t.name + '</div></td>' +
         '<td class="col-hide-md"><span class="sector-tag">' + t.sector + '</span></td>' +
-        '<td class="num">' + fmtPrice(t.price) + '</td>' +
+        '<td class="num">' + fmtPrice(t.price) + sessBadge(t.session) + '</td>' +
         '<td class="num ' + pctCls(t.change_d1_pct) + '">' + fmtPct(t.change_d1_pct) + '</td>' +
         '<td class="num col-hide-sm ' + pctCls(t.change_1m_pct) + '">' + fmtPct(t.change_1m_pct) + '</td>' +
         '<td class="num ' + pctCls(t.pullback_from_high_pct) + '">' + fmtPct(t.pullback_from_high_pct) + '</td>' +

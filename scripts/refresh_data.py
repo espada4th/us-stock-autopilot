@@ -49,6 +49,28 @@ FINNHUB_INSIDER_LOOKBACK_DAYS = 30
 FINNHUB_REQ_TIMEOUT = 8
 FINNHUB_CALL_SLEEP = 0.12   # ~500 calls/min theoretical; we stay well under 60/min/endpoint
 
+def _us_market_session(ts_unix):
+    """Map a Unix timestamp to US equity market session.
+    Returns "PRE", "REG", "POST", or "CLOSED" (weekend/overnight).
+    US Eastern: PRE 04:00-09:30, REG 09:30-16:00, POST 16:00-20:00.
+    Timezone uses fixed offset -04:00 (EDT). Close enough for badge display;
+    DST edge cases give at most 1hr drift twice a year."""
+    if not ts_unix:
+        return "CLOSED"
+    try:
+        ts = int(ts_unix)
+    except (TypeError, ValueError):
+        return "CLOSED"
+    # Fixed EDT offset; simpler than zoneinfo and works on CI runners.
+    et = dt.datetime.utcfromtimestamp(ts) - dt.timedelta(hours=4)
+    if et.weekday() >= 5:
+        return "CLOSED"
+    mins = et.hour * 60 + et.minute
+    if   4*60  <= mins <  9*60+30: return "PRE"
+    elif 9*60+30 <= mins < 16*60:  return "REG"
+    elif 16*60   <= mins < 20*60:  return "POST"
+    else:                          return "CLOSED"
+
 # Translation (EN -> TH) for news headlines/summaries. Uses deep-translator
 # (free, scrapes Google Translate). Falls back to English on any error.
 # Set TRANSLATE_NEWS=0 to disable even if lib is installed.
@@ -954,6 +976,12 @@ def main():
             q_rt = bundle.get("quote_rt")
             if q_rt and q_rt.get("price"):
                 t["quote_rt"] = q_rt
+                # Real-time overrides yfinance daily close (includes PRE/POST).
+                t["price"]     = q_rt["price"]
+                t["price_asof"] = q_rt.get("ts")
+                t["session"]    = _us_market_session(q_rt.get("ts"))
+                if q_rt.get("change_pct") is not None:
+                    t["change_d1_pct"] = q_rt["change_pct"]
             if bundle.get("news"):
                 t["news"] = bundle["news"]
             if bundle.get("insider"):
