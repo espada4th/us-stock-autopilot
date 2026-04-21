@@ -333,7 +333,7 @@ function stars(n) {
 function fmtPct(v, d=1) { if (v==null||isNaN(v)) return '—'; const s = v>0?'+':''; return s + v.toFixed(d) + '%'; }
 function fmtNum(v, d=2) { if (v==null||isNaN(v)) return '—'; return v.toFixed(d); }
 function sessBadge(s){
-  if (\!s || s === 'REG') return '';
+  if (!s || s === 'REG') return '';
   const label = s === 'PRE' ? 'PRE' : (s === 'POST' ? 'POST' : 'CLOSED');
   const cls   = s.toLowerCase();
   return `<span class="sess ${cls}" title="Extended-hours price (US ${label})">${label}</span>`;
