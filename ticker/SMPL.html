@@ -188,6 +188,20 @@
   .news-item .meta .src { color:var(--muted); font-weight:600; }
   .news-item .meta .ts { font-family:'JetBrains Mono',monospace; }
   .news-item .sum { font-size:12px; color:var(--muted); line-height:1.5; margin-top:2px; }
+  .news-item .hl-en, .news-item .sum-en {
+    font-size:11px; color:var(--sub); line-height:1.45; margin-top:2px;
+    font-style:italic; opacity:0.75;
+  }
+  .news-item .hl-en { font-weight:500; }
+  .news-item .lang-toggle {
+    display:inline-block; margin-left:6px; font-size:10px; padding:1px 6px;
+    border-radius:4px; background:var(--panel-2); color:var(--muted);
+    border:1px solid var(--line); cursor:pointer; user-select:none;
+    font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
+  }
+  .news-item .lang-toggle:hover { color:var(--blue); border-color:var(--blue); }
+  .news-item.show-en .hl-th, .news-item.show-en .sum-th { display:none; }
+  .news-item:not(.show-en) .hl-en, .news-item:not(.show-en) .sum-en { display:none; }
 
   /* Insider */
   .ins-summary {
@@ -303,7 +317,7 @@
 
 <script>
 // SYMBOL is injected by generator - replace "AAPL"
-const SYMBOL = "CNXC";
+const SYMBOL = "SMPL";
 
 // ===================== formatters =====================
 function stars(n) {
@@ -683,22 +697,34 @@ function renderNews(t) {
       return `${d.getFullYear()}-${mo}-${da} ${hh}:${mi}`;
     } catch(e) { return ''; }
   };
-  const rows = items.slice(0, 5).map(n => {
-    const hl = n.url
-      ? `<a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">${esc(n.headline)}</a>`
-      : esc(n.headline);
-    return `<div class="news-item">
-      <div class="hl">${hl}</div>
+  const rows = items.slice(0, 5).map((n, idx) => {
+    const hlEn = n.headline || '';
+    const hlTh = n.headline_th || '';
+    const hasTh = !!(hlTh && hlTh !== hlEn);
+    const primary = hasTh ? hlTh : hlEn;
+    const linkOpen  = n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">` : '';
+    const linkClose = n.url ? `</a>` : '';
+    const langBtn = hasTh
+      ? `<span class="lang-toggle" onclick="this.closest('.news-item').classList.toggle('show-en')">EN/TH</span>`
+      : '';
+    const sumEn = n.summary || '';
+    const sumTh = n.summary_th || '';
+    const sumHasTh = !!(sumTh && sumTh !== sumEn);
+    const sumPrimary = sumHasTh ? sumTh : sumEn;
+    return `<div class="news-item" data-idx="${idx}">
+      <div class="hl hl-th">${linkOpen}${esc(primary)}${linkClose}${langBtn}</div>
+      ${hasTh ? `<div class="hl-en">${linkOpen}${esc(hlEn)}${linkClose}</div>` : ''}
       <div class="meta">
         ${n.source ? `<span class="src">${esc(n.source)}</span>` : ''}
         ${n.datetime ? `<span class="ts">${esc(fmtTs(n.datetime))}</span>` : ''}
       </div>
-      ${n.summary ? `<div class="sum">${esc(n.summary)}</div>` : ''}
+      ${sumPrimary ? `<div class="sum sum-th">${esc(sumPrimary)}</div>` : ''}
+      ${sumHasTh ? `<div class="sum sum-en">${esc(sumEn)}</div>` : ''}
     </div>`;
   }).join('');
   return `
   <div class="card">
-    <h2 class="news">News <span class="src-tag">Finnhub · 7d</span></h2>
+    <h2 class="news">News <span class="src-tag">Finnhub · 7d · TH</span></h2>
     <div class="news-list">${rows}</div>
   </div>`;
 }
