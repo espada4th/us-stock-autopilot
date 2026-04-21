@@ -167,6 +167,18 @@
     .sess.pre{background:rgba(255,196,61,0.18);color:var(--yellow);}
     .sess.post{background:rgba(138,92,255,0.18);color:var(--purple);}
     .sess.closed{background:rgba(148,163,184,0.18);color:var(--muted);}
+  .vol-cell { font-family:'JetBrains Mono',monospace; white-space:nowrap; }
+  .vol-cell .vol-main { font-size:12px; }
+  .vol-cell .vol-x   { font-size:10px; color:var(--muted); margin-left:3px; }
+  .vol-cell .vol-x.pos { color:var(--green); }
+  .vol-cell .vol-x.neg { color:var(--red); }
+  .pre-badge {
+    display:inline-block; padding:1px 5px; border-radius:3px;
+    font-size:9px; font-weight:700; letter-spacing:0.04em;
+    background:rgba(255,196,61,0.18); color:var(--yellow);
+    margin-left:4px; font-family:'JetBrains Mono',monospace;
+  }
+  .pre-badge.hot { background:rgba(255,90,106,0.22); color:var(--red); }
     .rsi-pill {
     display:inline-block; padding:2px 7px; border-radius:4px;
     font-size:11px; font-family:'JetBrains Mono',monospace; font-weight:600;
@@ -215,7 +227,22 @@
     .brand h1 { font-size:14px; }
     .search-input { width:130px; }
   }
-</style>
+  .rails { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:18px 0; }
+  @media (max-width:760px) { .rails { grid-template-columns:1fr; } }
+  .rail { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .rail h3 { font-size:13px; font-weight:700; margin:0 0 10px; letter-spacing:0.06em; text-transform:uppercase; display:flex; align-items:center; gap:8px; }
+  .rail.dip h3 { color:var(--red); }
+  .rail.hi h3  { color:var(--green); }
+  .rail h3 .ct { background:var(--panel-2); color:var(--muted); padding:1px 6px; border-radius:4px; font-size:10px; font-weight:600; letter-spacing:0; }
+  .rail ul { list-style:none; margin:0; padding:0; }
+  .rail li { display:flex; align-items:center; gap:10px; padding:5px 0; font-size:12px; border-bottom:1px dashed var(--line); cursor:pointer; }
+  .rail li:last-child { border-bottom:0; }
+  .rail li:hover { background:var(--panel-2); }
+  .rail li .sym { font-family:'JetBrains Mono',monospace; font-weight:700; min-width:56px; }
+  .rail li .nm  { color:var(--muted); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+  .rail li .v   { font-family:'JetBrains Mono',monospace; font-weight:600; min-width:64px; text-align:right; }
+  .rail li.empty { color:var(--muted); font-style:italic; justify-content:center; padding:12px 0; }
+  </style>
 </head>
 <body>
 <header>
@@ -243,7 +270,18 @@
 <div class="table-wrap">
   <div class="table-card">
     <div class="state" id="state"><span class="spinner"></span>Loading buy-the-dip scanner…</div>
-    <table id="scanner" style="display:none">
+      <div class="rails" id="rails">
+    <div class="rail dip">
+      <h3>FRESH DIP TODAY <span class="ct" id="fd-ct">0</span></h3>
+      <ul id="rail-fresh-dip"><li class="empty">no data</li></ul>
+    </div>
+    <div class="rail hi">
+      <h3>AT 52W HIGH <span class="ct" id="hi-ct">0</span></h3>
+      <ul id="rail-52w-high"><li class="empty">no data</li></ul>
+    </div>
+  </div>
+
+  <table id="scanner" style="display:none">
       <thead>
         <tr>
           <th data-k="symbol">Ticker <span class="arrow">↕</span></th>
@@ -255,6 +293,7 @@
           <th data-k="rsi" class="num col-hide-sm">RSI <span class="arrow">↕</span></th>
           <th data-k="dip_score" class="num sorted">Dip Score <span class="arrow">↓</span></th>
           <th data-k="momentum_score" class="num">Momentum <span class="arrow">↕</span></th>
+          <th data-k="volume_today" class="num col-hide-md">Volume <span class="arrow">↕</span></th>
           <th data-k="discount_to_fv_pct" class="num col-hide-md">FV Disc <span class="arrow">↕</span></th>
           <th data-k="star_rating" class="num col-hide-md">★</th>
           <th data-k="days_to_earn" class="num col-hide-md">Earn in <span class="arrow">↕</span></th>
@@ -282,7 +321,7 @@ function fmtPct(v, digits=1) {
 }
 function pctCls(v) { if (v == null) return 'neu'; return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu'; }
 function sessBadge(s){
-      if (\!s || s === 'REG') return '';
+      if (!s || s === 'REG') return '';
       const label = s === 'PRE' ? 'PRE' : (s === 'POST' ? 'POST' : 'CLOSED');
       const cls   = s.toLowerCase();
       return '<span class="sess '+cls+'" title="Extended-hours price (US '+label+')">'+label+'</span>';
@@ -478,6 +517,7 @@ function sortRows(rows) {
       case 'star_rating': return t.val && t.val.star_rating;
       case 'days_to_earn': return t.catalyst ? t.catalyst.days_to_earn : 9999;
       case 'entry_low': return t.entry && t.entry.entry_low;
+      case 'volume_today': return t.tech && t.tech.volume_today;
       default: return t[k];
     }
   };
@@ -489,11 +529,42 @@ function sortRows(rows) {
   return rows;
 }
 
+function fmtVolCompact(v) {
+  if (v == null) return '<span class="mut">—</span>';
+  if (v >= 1e9) return (v/1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v/1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v/1e3).toFixed(0) + 'K';
+  return String(v);
+}
+function volRatioCls(r) {
+  if (r == null) return '';
+  if (r >= 1.5) return 'pos';
+  if (r <= 0.5) return 'neg';
+  return '';
+}
+function preBadge(pv, avg3) {
+  if (!pv) return '';
+  const ratio = avg3 && avg3 > 0 ? (pv/avg3) : null;
+  const cls = ratio != null && ratio >= 0.10 ? 'hot' : '';
+  const pct = ratio != null ? Math.round(ratio*100) + '%' : '';
+  return '<span class="pre-badge ' + cls + '">PRE ' + fmtVolCompact(pv) + (pct ? ' ' + pct : '') + '</span>';
+}
+function renderVolCell(t) {
+  const tech = t.tech || {};
+  const vt = tech.volume_today;
+  const r3 = tech.vol_ratio_today_3d;
+  const pv = t.premarket_volume;
+  const main = vt != null ? '<span class="vol-main">' + fmtVolCompact(vt) + '</span>' : '<span class="mut">—</span>';
+  const xcls = volRatioCls(r3);
+  const x = r3 != null ? '<span class="vol-x ' + xcls + '">' + r3.toFixed(1) + 'x</span>' : '';
+  const pb = preBadge(pv, tech.avg_vol_3d);
+  return '<td class="num col-hide-md vol-cell">' + main + x + pb + '</td>';
+}
 function renderTable() {
   const rows = sortRows(getFiltered());
   const tbody = document.getElementById('tbody');
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="15" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="16" style="text-align:center; padding:40px; color:var(--muted);">No tickers match filters</td></tr>';
   } else {
     tbody.innerHTML = rows.map(function(t){
       const dc = dipClass(t.dip_score);
@@ -525,6 +596,7 @@ function renderTable() {
         '<td class="num col-hide-sm"><span class="rsi-pill ' + rc + '">' + fmtNum(rsi, 0) + '</span></td>' +
         '<td class="num"><span class="dip-badge ' + dc + '">' + t.dip_score + '</span>' + rotHtml + '</td>' +
         '<td class="num"><span class="mom-badge ' + mc + '">' + mom + '</span></td>' +
+        renderVolCell(t) +
         '<td class="num col-hide-md ' + (fvd != null && fvd > 0 ? 'pos' : 'neg') + '">' + fmtPct(fvd) + '</td>' +
         '<td class="num col-hide-md">' + stars(star) + '</td>' +
         '<td class="num col-hide-md ' + earnCls + '">' + earn + '</td>' +
@@ -563,6 +635,7 @@ async function load() {
     buildKPIs();
     buildFilters();
     renderTable();
+    renderRails(DATA.rails);
     bindHeaderSort();
     updateAgo();
     setInterval(updateAgo, 30000);
@@ -573,6 +646,31 @@ async function load() {
 }
 
 load();
+
+    // ===== Rails (Fresh Dip Today + At 52W High) =====
+    function renderRails(rails){
+      const fd = (rails && rails.fresh_dip_today) || [];
+      const hi = (rails && rails.new_52w_high)    || [];
+      document.getElementById('fd-ct').textContent = fd.length;
+      document.getElementById('hi-ct').textContent = hi.length;
+      const fdUl = document.getElementById('rail-fresh-dip');
+      const hiUl = document.getElementById('rail-52w-high');
+      const go = (s) => `location.href='ticker/${s}.html'`;
+      fdUl.innerHTML = fd.length === 0
+        ? '<li class="empty">— ตลาดไม่มีใครลงเกิน 1.5% วันนี้ —</li>'
+        : fd.map(x => `<li onclick="${go(x.symbol)}">
+            <span class="sym">${x.symbol}</span>
+            <span class="nm">${x.name||''}</span>
+            <span class="v ${pctCls(x.change_d1_pct)}">${fmtPct(x.change_d1_pct)}</span>
+          </li>`).join('');
+      hiUl.innerHTML = hi.length === 0
+        ? '<li class="empty">— ไม่มี ticker ใกล้ 52W high —</li>'
+        : hi.map(x => `<li onclick="${go(x.symbol)}">
+            <span class="sym">${x.symbol}</span>
+            <span class="nm">${x.name||''}</span>
+            <span class="v ${pctCls(x.change_d1_pct)}">${fmtPct(x.change_d1_pct)}</span>
+          </li>`).join('');
+    }
 </script>
 </body>
 </html>

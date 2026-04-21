@@ -35,6 +35,12 @@ BUILD_UNIV   = ROOT / "scripts" / "build_universe.py"
 
 HISTORY_CAP  = 180      # days of sparkline history to keep per ticker
 TOP_N        = 50       # how many tickers to publish
+MIN_MARKET_CAP_B = 0.05  # soft floor: $50M market cap. Only filters tickers where
+                         # market_cap_b is populated (narratives_manual overlay).
+                         # Most S&P 1500 tickers clear this many times over.
+FRESH_DIP_THRESHOLD_PCT = -1.5   # change_d1_pct cutoff for "fresh dip today" rail
+NEAR_HIGH_THRESHOLD_PCT = -1.5   # pullback_from_high cutoff for "new 52W high" rail
+RAIL_SIZE = 10                    # how many tickers per rail
 UNIVERSE_MAX_AGE_DAYS = 30
 
 # Chunk size for yfinance batch download. Yahoo handles ~200 tickers per call well.
@@ -296,6 +302,16 @@ def compute_tech(df):
         v60 = float(vol.tail(60).mean())
         vol_ratio = v5 / v60 if v60 > 0 else None
 
+    # Today vs 3-day avg volume (short-horizon spike detector)
+    vol_today = None
+    vol_avg_3d = None
+    vol_ratio_today_3d = None
+    if vol is not None and len(vol) >= 3:
+        vol_today = float(vol.iloc[-1])
+        vol_avg_3d = float(vol.tail(3).mean())
+        if vol_avg_3d > 0:
+            vol_ratio_today_3d = vol_today / vol_avg_3d
+
     # History for sparkline (last 180 closes)
     hist_closes = close.tail(HISTORY_CAP).round(2).tolist()
     hist_dates  = [d.strftime("%Y-%m-%d") for d in close.tail(HISTORY_CAP).index]
@@ -334,6 +350,9 @@ def compute_tech(df):
             "support":    _round(swing_lo, 2),
             "resistance": _round(swing_hi, 2),
             "vol_ratio_5_60": _round(vol_ratio, 2) if vol_ratio else None,
+            "volume_today":       int(vol_today) if vol_today else None,
+            "avg_vol_3d":         int(vol_avg_3d) if vol_avg_3d else None,
+            "vol_ratio_today_3d": _round(vol_ratio_today_3d, 2) if vol_ratio_today_3d else None,
         },
         "history": {"dates": hist_dates, "closes": hist_closes},
     }
@@ -525,12 +544,39 @@ def compute_dip_score(t):
         if vr >= 1.5:      pts += 15; signals.append("VOLUME SURGE")
         elif vr >= 1.2:    pts += 8
 
+    # 5b) Today vs 3-day volume (max +3 / -2): short-horizon conviction check.
+    #     Dip on 2x normal volume = real flush; dip on 0.4x volume = quiet slide.
+    vr3 = tech.get("vol_ratio_today_3d")
+    if vr3 is not None:
+        if vr3 >= 2.0:      pts += 3; signals.append("VOL 2x 3D")
+        elif vr3 >= 1.5:    pts += 2; signals.append("VOL 1.5x 3D")
+        elif vr3 <= 0.4:    pts -= 2
+
     # Near support: within 3% of 20d swing low
     price = t.get("price")
     support = tech.get("support")
     if price and support and abs(price - support) / price < 0.03:
         signals.append("NEAR SUPPORT")
 
+    # 6) Intraday dip bonus/penalty (drives hour-to-hour rotation).
+    #    Rewards tickers dropping hard today, penalises late-day ramp-ups.
+    ch1 = t.get("change_d1_pct")
+    if ch1 is not None:
+        if   ch1 <= -3:  pts += 6; signals.append(f"DROP {ch1:.1f}% TODAY")
+        elif ch1 <= -2:  pts += 4; signals.append(f"DROP {ch1:.1f}% TODAY")
+        elif ch1 <= -1:  pts += 2
+        elif ch1 >= 3:   pts -= 5
+        elif ch1 >= 2:   pts -= 3
+
+    # 7) Near 52W high bonus (for trend-followers alongside the dip hunters).
+    #    Tickers within 1% of 52W high get +5, which pushes breakout candidates
+    #    into view even though core theme is buy-the-dip.
+    pb = t.get("pullback_from_high_pct")
+    if pb is not None and pb >= -1.0:
+        pts += 5
+        signals.append("AT 52W HIGH")
+
+    pts = max(0, min(100, pts))
     return int(round(pts)), signals[:6]
 
 
@@ -544,6 +590,97 @@ def star_from_dip(score):
     if score >= 50: return 3
     if score >= 35: return 2
     return 1
+
+
+# -------------------- Premarket volume (yfinance intraday) ------
+
+def fetch_premarket_volumes(symbols):
+    """Batch-fetch today's 5-minute bars with prepost=True, sum Volume for bars
+    before 09:30 US/Eastern. Returns dict {sym: premarket_volume_int}.
+
+    Only called for top-N (~50 tickers) so the extra bandwidth is bounded.
+    """
+    if not symbols:
+        return {}
+    try:
+        import yfinance as yf
+        import pandas as pd
+        import datetime as dt
+    except Exception as e:
+        print(f"WARN: premarket fetch skipped - yfinance/pandas missing: {e}")
+        return {}
+    try:
+        df = yf.download(
+            " ".join(symbols),
+            period="2d", interval="5m",
+            prepost=True, group_by="ticker",
+            threads=True, progress=False, auto_adjust=False,
+        )
+    except Exception as e:
+        print(f"WARN: premarket batch download failed: {e}")
+        return {}
+    if df is None or df.empty:
+        return {}
+
+    def _sum_pre(sub):
+        if sub is None or sub.empty or "Volume" not in sub.columns:
+            return 0
+        idx = sub.index
+        if getattr(idx, "tz", None) is None:
+            return 0
+        try:
+            et = idx.tz_convert("America/New_York")
+        except Exception:
+            return 0
+        latest_day = et[-1].date()
+        cutoff = dt.time(9, 30)
+        mask = [(t.date() == latest_day and t.time() < cutoff) for t in et]
+        vser = sub.loc[mask, "Volume"]
+        if vser is None or vser.empty:
+            return 0
+        total = float(vser.fillna(0).sum())
+        return int(total) if total > 0 else 0
+
+    result = {}
+    if len(symbols) == 1:
+        pv = _sum_pre(df)
+        if pv:
+            result[symbols[0]] = pv
+        return result
+    for sym in symbols:
+        try:
+            sub = df[sym]
+        except Exception:
+            continue
+        pv = _sum_pre(sub)
+        if pv:
+            result[sym] = pv
+    return result
+
+
+def apply_volume_bonus_premarket(t):
+    """Apply premarket-volume bonus to an already-scored ticker in place.
+    Budget: up to +5 pts. Only run on top-N after premarket_volume is attached."""
+    pv = t.get("premarket_volume")
+    avg3 = (t.get("tech") or {}).get("avg_vol_3d")
+    if not pv or not avg3 or avg3 <= 0:
+        return
+    ratio = pv / avg3
+    t["premarket_ratio_3d"] = round(ratio, 3)
+    bonus = 0
+    label = None
+    if ratio >= 0.10:
+        bonus, label = 5, "HEAVY PRE"
+    elif ratio >= 0.05:
+        bonus, label = 3, "PRE ACTIVE"
+    elif ratio >= 0.02:
+        bonus, label = 1, None
+    if bonus:
+        t["dip_score"] = min(100, int(t.get("dip_score", 0)) + bonus)
+    if label:
+        sigs = list(t.get("dip_signals") or [])
+        sigs.insert(0, label)
+        t["dip_signals"] = sigs[:6]
 
 
 # -------------------- Finnhub API (optional) --------------------
@@ -911,6 +1048,10 @@ def main():
             if tm:
                 t["val"]["analyst_upside_pct"] = round(100 * (tm - t["price"]) / t["price"], 1)
 
+        # Soft market-cap floor (only applies where market_cap_b populated)
+        mc = t.get("market_cap_b")
+        if MIN_MARKET_CAP_B and mc is not None and mc < MIN_MARKET_CAP_B:
+            continue
         candidates.append(t)
 
     # Sort by dip_score first, then drop "falling knife" candidates:
@@ -964,6 +1105,22 @@ def main():
 
     print(f"Top dip scores: " + ", ".join(f"{t['symbol']}={t['dip_score']}" for t in top[:10]) + " ...")
 
+    # ---- Derived rails: Fresh Dip Today + New 52W High (span FULL universe,
+    # not just top-N — gives side views beyond the main dip screener) ----
+    fresh_dip_today = sorted(
+        [c for c in candidates
+         if c.get("change_d1_pct") is not None
+         and c["change_d1_pct"] <= FRESH_DIP_THRESHOLD_PCT],
+        key=lambda x: x["change_d1_pct"],
+    )[:RAIL_SIZE]
+    new_52w_high = sorted(
+        [c for c in candidates
+         if c.get("pullback_from_high_pct") is not None
+         and c["pullback_from_high_pct"] >= NEAR_HIGH_THRESHOLD_PCT],
+        key=lambda x: -x["pullback_from_high_pct"],
+    )[:RAIL_SIZE]
+    print(f"Rails: fresh_dip_today={len(fresh_dip_today)}, new_52w_high={len(new_52w_high)}")
+
     # ---- Optional Finnhub enrichment (news + insider + quote + fundamentals) ----
     if FINNHUB_API_KEY:
         print(f"Finnhub: enriching {len(top)} tickers (this takes ~{len(top)*5//10}s at ~2-3 calls/sec)...")
@@ -1005,6 +1162,22 @@ def main():
     else:
         print("Finnhub: skipped (no API key). Set FINNHUB_API_KEY env var to enable.")
 
+    # ---- Premarket volume (yfinance intraday, top-N only) ----
+    try:
+        top_symbols = [t["symbol"] for t in top]
+        pre_vols = fetch_premarket_volumes(top_symbols)
+        for t in top:
+            pv = pre_vols.get(t["symbol"])
+            if pv:
+                t["premarket_volume"] = int(pv)
+                apply_volume_bonus_premarket(t)
+        n_pre = sum(1 for t in top if t.get("premarket_volume"))
+        print(f"Premarket: {n_pre}/{len(top)} tickers had pre-market volume")
+        # Re-sort top-N by updated dip_score (premarket bonus may have reshuffled)
+        top.sort(key=lambda x: x.get("dip_score", 0), reverse=True)
+    except Exception as e:
+        print(f"WARN: premarket enrichment failed: {e}")
+
     # Summary
     scores = [t["dip_score"] for t in top]
     moms   = [t.get("momentum_score", 0) for t in top]
@@ -1039,6 +1212,20 @@ def main():
         "as_of":       now.strftime("%Y-%m-%d %H:%M UTC"),
         "universe_label": f"S&P 1500 + NASDAQ-100 Scanner (top {TOP_N}/{len(syms)})",
         "tickers": top,
+        "rails": {
+            "fresh_dip_today": [{
+                "symbol": c["symbol"], "name": c.get("name"),
+                "price": c.get("price"), "change_d1_pct": c.get("change_d1_pct"),
+                "session": c.get("session"), "dip_score": c.get("dip_score"),
+                "pullback_from_high_pct": c.get("pullback_from_high_pct"),
+            } for c in fresh_dip_today],
+            "new_52w_high": [{
+                "symbol": c["symbol"], "name": c.get("name"),
+                "price": c.get("price"), "change_d1_pct": c.get("change_d1_pct"),
+                "session": c.get("session"), "momentum_score": c.get("momentum_score"),
+                "pullback_from_high_pct": c.get("pullback_from_high_pct"),
+            } for c in new_52w_high],
+        },
         "summary": summary,
     }
 
