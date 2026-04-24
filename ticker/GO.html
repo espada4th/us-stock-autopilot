@@ -170,6 +170,34 @@
   .card h2.tech::before { background:var(--orange); }
   .card h2.fund::before { background:var(--green); }
   .card h2.rev::before  { background:var(--yellow); }
+  .card h2.aith::before { background:var(--purple); }
+  .ai-score {
+    font-size:11px; font-weight:700; color:var(--purple);
+    background:rgba(167,139,250,0.18);
+    padding:2px 7px; border-radius:4px;
+    margin-left:6px;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .ai-chips { display:flex; flex-wrap:wrap; gap:5px; margin:4px 0 12px; }
+  .ai-chip {
+    font-size:10px; padding:3px 8px; border-radius:3px;
+    font-family:'JetBrains Mono',monospace;
+    font-weight:700; letter-spacing:0.04em;
+  }
+  .ai-chip.ai-pivot { color:var(--red);    background:rgba(255,90,106,0.18); }
+  .ai-chip.ai-news  { color:var(--purple); background:rgba(167,139,250,0.18); }
+  .ai-chip.ai-theme { color:var(--blue);   background:rgba(91,155,255,0.16); }
+  .ai-tag {
+    display:inline-block; margin-left:5px;
+    font-size:10px; padding:1px 6px; border-radius:3px;
+    font-family:'JetBrains Mono',monospace;
+    color:var(--blue); background:rgba(91,155,255,0.14);
+  }
+  .ai-headline {
+    font-size:12px; color:var(--text);
+    line-height:1.55; margin-top:4px;
+  }
+  .ai-news-row { align-items:flex-start; }
   .card h2.cat::before { background:var(--yellow); }
   .fund-score, .rev-score {
     font-size:11px; color:var(--yellow);
@@ -704,6 +732,39 @@ function renderFundamentals(t) {
   </div>`;
 }
 
+function renderAIThesis(t) {
+  const newsScore  = t.ai_news_score || 0;
+  const themeScore = t.theme_score  || 0;
+  const pivotScore = t.ai_pivot_score || 0;
+  const total = newsScore + themeScore + pivotScore;
+  if (total <= 0) return '';
+  const parts = [];
+  if (pivotScore) parts.push(`<span class="ai-chip ai-pivot">+${pivotScore} AI PIVOT</span>`);
+  if (newsScore)  parts.push(`<span class="ai-chip ai-news">+${newsScore} AI NEWS</span>`);
+  if (themeScore) parts.push(`<span class="ai-chip ai-theme">+${themeScore} THEME</span>`);
+  const chips = `<div class="ai-chips">${parts.join('')}</div>`;
+
+  const rows = [];
+  if (pivotScore && t.ai_pivot_reason) {
+    rows.push(`<div class="mrow"><span class="k">AI Pivot</span><span class="v thai" style="max-width:62%; text-align:right;">${esc(t.ai_pivot_reason)}</span></div>`);
+  }
+  if (Array.isArray(t.theme_hits) && t.theme_hits.length) {
+    const tagHtml = t.theme_hits.map(s => `<span class="ai-tag">${esc(s)}</span>`).join('');
+    rows.push(`<div class="mrow"><span class="k">Themes</span><span class="v" style="text-align:right;">${tagHtml}</span></div>`);
+  }
+  if (Array.isArray(t.ai_news_hits) && t.ai_news_hits.length) {
+    const items = t.ai_news_hits.slice(0,3).map(h => `<div class="ai-headline thai">• ${esc(h)}</div>`).join('');
+    rows.push(`<div class="mrow ai-news-row"><span class="k">AI Headlines</span><div class="v" style="flex:1;">${items}</div></div>`);
+  }
+
+  return `
+  <div class="card">
+    <h2 class="aith">AI Thesis <span class="ai-score">+${total}</span></h2>
+    ${chips}
+    ${rows.join('')}
+  </div>`;
+}
+
 function renderReversal(t) {
   if (t.reversal_score == null || t.reversal_score <= 0) return '';
   const signals = Array.isArray(t.reversal_signals) ? t.reversal_signals : [];
@@ -865,6 +926,7 @@ function render(t, asof, generatedAt) {
       renderFundamentals(t),
       renderCatalysts(t),
     '</div>',
+    renderAIThesis(t),
     renderReversal(t),
     '<div class="grid2">',
       renderNews(t),
