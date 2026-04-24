@@ -1,0 +1,13 @@
+{
+  "_comment": "Hand-curated list of tickers that pivoted to AI / AI datacenter / AI infrastructure. Gets +30 ai_pivot_score. Edit this file to add/remove pivots. Keys are symbols.",
+  "_schema": {
+    "reason": "One-line English/Thai reason shown on ticker page",
+    "signals": "Array of short tags shown in signal chips (e.g. AI PIVOT)",
+    "added": "YYYY-MM-DD when flagged"
+  },
+  "BIRD": {
+    "reason": "Allbirds pivoted to AI datacenter infrastructure (2026)",
+    "signals": ["AI PIVOT"],
+    "added": "2026-04-24"
+  }
+}

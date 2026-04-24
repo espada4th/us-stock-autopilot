@@ -638,6 +638,109 @@ def compute_reversal_score(df, tech_pack, t):
     return int(pts), signals[:4]
 
 
+AI_NEWS_KEYWORDS = (
+    " ai ", " ai-", " ai/", "ai-powered", "ai powered", "ai stock",
+    "artificial intelligence", "generative ai", "gen ai", "genai",
+    "copilot", "large language model", " llm ", "chatgpt",
+    "machine learning", "neural network", "foundation model",
+    "anthropic", "openai",
+    "\u0e40\u0e2d\u0e44\u0e2d", "\u0e1b\u0e31\u0e0d\u0e0d\u0e32\u0e1b\u0e23\u0e30\u0e14\u0e34\u0e29\u0e10\u0e4c",
+)
+
+AI_THEME_KEYWORDS = (
+    ("photonics", 20), ("lightwave", 20), ("silicon photon", 20),
+    ("optical network", 15),
+    ("gpu", 18), ("graphics processor", 15), ("accelerator", 12),
+    ("datacenter", 20), ("data center", 20), ("cloud infrastructure", 12),
+    ("nuclear", 18), ("small modular reactor", 20), (" smr ", 18),
+    ("semiconductor", 20), (" chip ", 15), ("fabless", 15),
+    ("foundry", 12), (" eda ", 15), ("lithography", 18),
+    (" hbm ", 18), ("memory chip", 15), ("ai infrastructure", 20),
+)
+
+
+def compute_ai_news_score(t):
+    """+30 if any recent news headline or summary mentions AI keywords.
+    Returns (pts, list of matched headlines up to 3)."""
+    news = t.get("news") or []
+    if not news:
+        return 0, []
+    hits = []
+    for item in news[:20]:
+        title = (item.get("headline") or item.get("title") or "").lower()
+        summary = (item.get("summary") or "").lower()
+        blob = " " + title + "  " + summary + " "
+        for kw in AI_NEWS_KEYWORDS:
+            if kw in blob:
+                h = item.get("headline_th") or item.get("headline") or item.get("title") or ""
+                if h and h not in hits:
+                    hits.append(h[:120])
+                break
+        if len(hits) >= 3:
+            break
+    return (30, hits) if hits else (0, [])
+
+
+def compute_theme_score(t):
+    """+up to 20 if company name/sector/industry matches AI-adjacent theme
+    keywords (GPU, datacenter, nuclear, photonics, semiconductor, ...).
+    Returns (max_pts, list of matched theme tags)."""
+    name = (t.get("name") or "").lower()
+    sector = (t.get("sector") or "").lower()
+    industry = (t.get("industry") or "").lower()
+    blob = " " + name + "  " + sector + "  " + industry + " "
+    hits = []
+    max_pts = 0
+    for kw, pts in AI_THEME_KEYWORDS:
+        if kw in blob:
+            tag = kw.strip().upper().replace(" ", "_")
+            if tag not in hits:
+                hits.append(tag)
+            if pts > max_pts:
+                max_pts = pts
+        if len(hits) >= 4:
+            break
+    return max_pts, hits
+
+
+_AI_PIVOT_CACHE = {"loaded": False, "tags": {}}
+
+def _load_ai_pivot_tags():
+    """Load ai_pivot_tags.json once (cached). Top-level _comment and _schema
+    keys are filtered out."""
+    if _AI_PIVOT_CACHE["loaded"]:
+        return _AI_PIVOT_CACHE["tags"]
+    p = ROOT / "ai_pivot_tags.json"
+    tags = {}
+    if p.exists():
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                raw = json.load(f) or {}
+            for k, v in raw.items():
+                if k.startswith("_"):
+                    continue
+                if isinstance(v, dict):
+                    tags[k.upper()] = v
+        except Exception as e:
+            print(f"WARN: could not load ai_pivot_tags.json: {e}")
+    _AI_PIVOT_CACHE["loaded"] = True
+    _AI_PIVOT_CACHE["tags"] = tags
+    return tags
+
+
+def compute_ai_pivot_score(t):
+    """+30 if ticker is in hand-curated ai_pivot_tags.json.
+    Returns (pts, signals, reason)."""
+    sym = (t.get("symbol") or "").upper()
+    tags = _load_ai_pivot_tags()
+    rec = tags.get(sym)
+    if not rec:
+        return 0, [], None
+    signals = list(rec.get("signals") or ["AI PIVOT"])
+    reason = rec.get("reason") or ""
+    return 30, signals, reason
+
+
 def compute_dip_score(t):
     """Composite 0-100 dip score from price-based signals."""
     pts = 0
@@ -815,7 +918,7 @@ def apply_volume_bonus_premarket(t):
     elif ratio >= 0.02:
         bonus, label = 1, None
     if bonus:
-        t["dip_score"] = min(100, int(t.get("dip_score", 0)) + bonus)
+        t["dip_score"] = min(150, int(t.get("dip_score", 0)) + bonus)
     if label:
         sigs = list(t.get("dip_signals") or [])
         sigs.insert(0, label)
@@ -1165,7 +1268,7 @@ def main():
         t["reversal_score"] = rev_score
         t["reversal_signals"] = rev_signals
         if rev_score > 0:
-            t["dip_score"] = min(100, int(t.get("dip_score", 0)) + rev_score)
+            t["dip_score"] = min(150, int(t.get("dip_score", 0)) + rev_score)
             existing = list(t.get("dip_signals") or [])
             for sig in rev_signals:
                 if sig not in existing:
@@ -1316,12 +1419,40 @@ def main():
             t["fundamentals_score"] = fund_pts
             t["fundamentals_signals"] = fund_sigs
             if fund_pts > 0:
-                t["dip_score"] = min(100, int(t.get("dip_score", 0)) + fund_pts)
+                t["dip_score"] = min(150, int(t.get("dip_score", 0)) + fund_pts)
                 existing = list(t.get("dip_signals") or [])
                 for sig in fund_sigs:
                     if sig not in existing:
                         existing.append(sig)
-                t["dip_signals"] = existing[:8]
+                t["dip_signals"] = existing[:10]
+
+            # AI news bonus +30 — fresh AI-theme headlines reach this ticker.
+            ai_pts, ai_hits = compute_ai_news_score(t)
+            t["ai_news_score"] = ai_pts
+            t["ai_news_hits"] = ai_hits
+            # Theme bonus +20 — GPU / photonics / datacenter / nuclear / semi.
+            theme_pts, theme_hits = compute_theme_score(t)
+            t["theme_score"] = theme_pts
+            t["theme_hits"] = theme_hits
+            # Pivot bonus +30 — hand-curated AI-pivot list (BIRD, etc.).
+            pivot_pts, pivot_sigs, pivot_reason = compute_ai_pivot_score(t)
+            t["ai_pivot_score"] = pivot_pts
+            if pivot_reason:
+                t["ai_pivot_reason"] = pivot_reason
+            total_ai_bonus = ai_pts + theme_pts + pivot_pts
+            if total_ai_bonus > 0:
+                t["dip_score"] = min(150, int(t.get("dip_score", 0)) + total_ai_bonus)
+                existing = list(t.get("dip_signals") or [])
+                if pivot_pts:
+                    for s in pivot_sigs:
+                        if s not in existing:
+                            existing.insert(0, s)
+                if ai_pts and "AI NEWS" not in existing:
+                    existing.insert(0, "AI NEWS")
+                for tag in theme_hits:
+                    if tag not in existing:
+                        existing.append(tag)
+                t["dip_signals"] = existing[:12]
             enriched += 1
         print(f"Finnhub: enriched {enriched}/{len(top)} tickers with news/insider/fundamentals")
     else:
