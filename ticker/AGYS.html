@@ -170,6 +170,21 @@
   .card h2.tech::before { background:var(--orange); }
   .card h2.fund::before { background:var(--green); }
   .card h2.rev::before  { background:var(--yellow); }
+  .card h2.sw::before   { background:var(--green); }
+  .sw-score {
+    font-size:11px; font-weight:700;
+    color:var(--green); background:rgba(34,211,160,0.18);
+    padding:2px 7px; border-radius:4px; margin-left:6px;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .sw-sigs { display:flex; flex-wrap:wrap; gap:5px; margin:4px 0 12px; }
+  .sw-sig {
+    font-size:10px; padding:3px 8px; border-radius:3px;
+    font-family:'JetBrains Mono',monospace;
+    font-weight:700; letter-spacing:0.04em;
+    color:var(--green); background:rgba(34,211,160,0.16);
+  }
+  .sw-entry-grid { margin:6px 0 12px; }
   .card h2.aith::before { background:var(--purple); }
   .ai-score {
     font-size:11px; font-weight:700; color:var(--purple);
@@ -765,6 +780,38 @@ function renderAIThesis(t) {
   </div>`;
 }
 
+function renderSwing(t) {
+  if (!t.swing_score || t.swing_score < 40) return '';
+  const e = t.swing_entry;
+  const sigs = (t.swing_signals || []).map(s => `<span class="sw-sig">${esc(s)}</span>`).join('');
+  const explain = {
+    'PX>EMA20':   'Price above EMA20 — short trend up',
+    'STACK':      'EMA20 > EMA50 — bullish stack',
+    'AT EMA20':   'Price at EMA20 (entry pullback zone)',
+    'PULLBACK':   'Pulled back 3-10% from recent high',
+    'RSI MID':    'RSI 35-50 — uptrend pullback range',
+    'HIGHER LOW': '5d low above prior 10d low',
+    'LOW ATR':    'ATR < 6% of price — risk manageable',
+  };
+  const explainRows = (t.swing_signals || []).map(s =>
+    `<div class="mrow"><span class="k">${esc(s)}</span><span class="v thai">${esc(explain[s] || '')}</span></div>`
+  ).join('');
+  const entryHtml = e ? `
+    <div class="entry-grid sw-entry-grid">
+      <div class="entry-box entry"><div class="l">Entry</div><div class="v">$${fmtNum(e.entry_low,2)}-$${fmtNum(e.entry_high,2)}</div></div>
+      <div class="entry-box stop"><div class="l">Stop</div><div class="v">$${fmtNum(e.stop,2)}</div><div class="sub">${e.stop_pct}%</div></div>
+      <div class="entry-box t1"><div class="l">Target</div><div class="v">$${fmtNum(e.target,2)}</div><div class="sub">+${e.target_pct}%</div></div>
+      <div class="entry-box t2"><div class="l">Hold / R:R</div><div class="v">${e.horizon_days}d</div><div class="sub">${e.rr}:1</div></div>
+    </div>` : '';
+  return `
+  <div class="card">
+    <h2 class="sw">Swing Trade <span class="sw-score">${t.swing_score}/100</span></h2>
+    <div class="sw-sigs">${sigs}</div>
+    ${entryHtml}
+    ${explainRows}
+  </div>`;
+}
+
 function renderReversal(t) {
   if (t.reversal_score == null || t.reversal_score <= 0) return '';
   const signals = Array.isArray(t.reversal_signals) ? t.reversal_signals : [];
@@ -927,6 +974,7 @@ function render(t, asof, generatedAt) {
       renderCatalysts(t),
     '</div>',
     renderAIThesis(t),
+    renderSwing(t),
     renderReversal(t),
     '<div class="grid2">',
       renderNews(t),
