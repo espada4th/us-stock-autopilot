@@ -34,7 +34,10 @@ WATCHLIST    = ROOT / "watchlist.json"
 BUILD_UNIV   = ROOT / "scripts" / "build_universe.py"
 
 HISTORY_CAP  = 180      # days of sparkline history to keep per ticker
-TOP_N        = 50       # how many tickers to publish
+TOP_N        = 50       # how many tickers to publish (legacy)
+TOP_DIP      = 30       # buy-the-dip top table size
+TOP_SWING    = 20       # swing-trade top table size
+SWING_MIN    = 40       # min swing_score to qualify for swing top
 MIN_MARKET_CAP_B = 0.05  # soft floor: $50M market cap. Only filters tickers where
                          # market_cap_b is populated (narratives_manual overlay).
                          # Most S&P 1500 tickers clear this many times over.
@@ -741,6 +744,114 @@ def compute_ai_pivot_score(t):
     return 30, signals, reason
 
 
+def compute_swing_score(t, df, tech_pack):
+    """Max 100. Pullback-in-uptrend setup (Mark Minervini / IBD style).
+    Holding 5-15 days. Stop -7%. Target +15% (R:R 2.14).
+
+    Stage filter: must be in uptrend (price >= EMA50). Returns 0 if not.
+
+    Categories (cap each):
+      Trend (30):    PX>EMA20 (10), STACK (10), 1m>0 (5), 3m>0 (5)
+      Pullback (30): AT EMA20 (15), PULLBACK 3-10% (10), RSI 35-50 (10)
+      Structure (25):higher-low (10), 5d>-3% (5), 1d>-2% (5), vol>0.6 (5)
+      Quality (15):  ATR<6% (5), pos52>=30% (5), pull -1 to -15 (5)
+    """
+    if tech_pack is None:
+        return 0, []
+    tech = tech_pack.get("tech", {}) or {}
+    price = tech_pack.get("price")
+    ema20 = tech.get("ema_20")
+    ema50 = tech.get("ema_50")
+    rsi   = tech.get("rsi_14")
+    atr   = tech.get("atr_14")
+    pos52 = tech_pack.get("pos_52w_pct")
+    pull  = tech_pack.get("pullback_from_high_pct")
+    if pull is None:
+        pull = 0
+    ch1m = tech_pack.get("change_1m_pct") or 0
+    ch3m = tech_pack.get("change_3m_pct") or 0
+    ch5d = tech_pack.get("change_5d_pct") or 0
+    ch1d = tech_pack.get("change_d1_pct") or 0
+    vr3  = tech.get("vol_ratio_today_3d")
+
+    if not price or not ema20 or not ema50:
+        return 0, []
+    if price < ema50:
+        return 0, []
+
+    pts = 0
+    signals = []
+
+    # 1) Trend (max 30)
+    tr = 0
+    if price > ema20:
+        tr += 10; signals.append("PX>EMA20")
+    if ema20 > ema50:
+        tr += 10; signals.append("STACK")
+    if ch1m > 0: tr += 5
+    if ch3m > 0: tr += 5
+    pts += min(30, tr)
+
+    # 2) Pullback in uptrend (max 30)
+    pl = 0
+    if abs(price - ema20) / price <= 0.03:
+        pl += 15; signals.append("AT EMA20")
+    if -10 <= pull <= -3:
+        pl += 10; signals.append("PULLBACK")
+    if rsi is not None and 35 <= rsi <= 50:
+        pl += 10; signals.append("RSI MID")
+    pts += min(30, pl)
+
+    # 3) Structure (max 25)
+    st = 0
+    try:
+        if df is not None and "Low" in df:
+            lo = df["Low"].astype(float)
+            if len(lo) >= 15:
+                low_5 = float(lo.tail(5).min())
+                low_prior = float(lo.iloc[-15:-5].min())
+                if low_5 > low_prior:
+                    st += 10; signals.append("HIGHER LOW")
+    except Exception:
+        pass
+    if ch5d > -3: st += 5
+    if ch1d > -2: st += 5
+    if vr3 is not None and vr3 > 0.6: st += 5
+    pts += min(25, st)
+
+    # 4) Quality (max 15)
+    q = 0
+    if atr is not None and price and atr / price < 0.06:
+        q += 5; signals.append("LOW ATR")
+    if pos52 is not None and pos52 >= 30:
+        q += 5
+    if -15 <= pull <= -1:
+        q += 5
+    pts += min(15, q)
+
+    pts = max(0, min(100, pts))
+    return int(pts), signals[:5]
+
+
+def compute_swing_entry(t):
+    """Entry zone for 5-15d swing trade. Stop -7%, target +15% (R:R 2.14)."""
+    price = t.get("price")
+    tech = t.get("tech", {}) or {}
+    ema20 = tech.get("ema_20")
+    if not price or not ema20:
+        return None
+    return {
+        "entry_low":   _round(ema20 * 0.995, 2),
+        "entry_high":  _round(ema20 * 1.020, 2),
+        "stop":        _round(price * 0.93, 2),
+        "target":      _round(price * 1.15, 2),
+        "stop_pct":    -7,
+        "target_pct":  15,
+        "rr":          2.14,
+        "horizon_days": "5-15",
+    }
+
+
 def compute_dip_score(t):
     """Composite 0-100 dip score from price-based signals."""
     pts = 0
@@ -1275,6 +1386,13 @@ def main():
                     existing.insert(0, sig)
             t["dip_signals"] = existing[:6]
 
+        # Swing score 0-100 — pullback-in-uptrend setup (independent from dip).
+        # Selects swing top 20 alongside dip top 30.
+        swing_pts, swing_sigs = compute_swing_score(t, df, tech_pack)
+        t["swing_score"] = swing_pts
+        t["swing_signals"] = swing_sigs
+        t["swing_entry"] = compute_swing_entry(t)
+
         t["entry"] = make_entry_zone(t)
 
         # Star rating: manual overlay wins; else auto-derive from dip_score so
@@ -1319,17 +1437,33 @@ def main():
         if c.get("on_watchlist") or (c.get("momentum_score", 0) >= MOMENTUM_MIN)
     ]
     dropped = len(candidates) - len(filtered)
-    top = filtered[:TOP_N]
+    dip_top = filtered[:TOP_DIP]
     print(f"Momentum filter: dropped {dropped} tickers with momentum<{MOMENTUM_MIN} "
           f"(likely falling knives)")
 
-    # Force-include watchlist symbols even if outside top-N (append, keep sort).
-    top_syms = {t["symbol"] for t in top}
-    forced = [c for c in candidates if c.get("on_watchlist") and c["symbol"] not in top_syms]
+    # Swing top — pullback-in-uptrend, sorted by swing_score (independent).
+    swing_sorted = sorted(candidates, key=lambda x: x.get("swing_score", 0), reverse=True)
+    swing_top = [c for c in swing_sorted if c.get("swing_score", 0) >= SWING_MIN][:TOP_SWING]
+    print(f"Swing top: {len(swing_top)} tickers with swing_score>={SWING_MIN}")
+
+    # Union: dip top + swing top (deduplicated, dip ordering first).
+    seen = set()
+    top = []
+    for c in dip_top + swing_top:
+        if c["symbol"] not in seen:
+            top.append(c)
+            seen.add(c["symbol"])
+    overlap = (len(dip_top) + len(swing_top)) - len(top)
+    print(f"Union: {len(top)} unique tickers (dip {len(dip_top)} + swing {len(swing_top)} - overlap {overlap})")
+
+    # Force-include watchlist symbols even if outside both top lists.
+    forced = [c for c in candidates if c.get("on_watchlist") and c["symbol"] not in seen]
     if forced:
         print(f"Force-including {len(forced)} watchlist symbols "
-              f"({', '.join(c['symbol'] for c in forced)}) below top-{TOP_N}")
+              f"({', '.join(c['symbol'] for c in forced)}) below top lists")
         top.extend(forced)
+        for c in forced:
+            seen.add(c["symbol"])
 
     # ---- Change tracking: compare vs previous dataset for badges (new / rank_up / rank_down) ----
     prev_rank = {}
@@ -1506,8 +1640,16 @@ def main():
         "schema": "scanner+top50",
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "as_of":       now.strftime("%Y-%m-%d %H:%M UTC"),
-        "universe_label": f"S&P 1500 + NASDAQ-100 Scanner (top {TOP_N}/{len(syms)})",
+        "universe_label": f"S&P 1500 + NASDAQ-100 Scanner (dip {TOP_DIP} + swing {TOP_SWING} / {len(syms)})",
         "tickers": top,
+        "top_dip_symbols": [
+            c["symbol"] for c in sorted(top, key=lambda x: x.get("dip_score", 0), reverse=True)
+            if c.get("dip_score", 0) > 0
+        ][:TOP_DIP],
+        "top_swing_symbols": [
+            c["symbol"] for c in sorted(top, key=lambda x: x.get("swing_score", 0), reverse=True)
+            if c.get("swing_score", 0) >= SWING_MIN
+        ][:TOP_SWING],
         "rails": {
             "fresh_dip_today": [{
                 "symbol": c["symbol"], "name": c.get("name"),

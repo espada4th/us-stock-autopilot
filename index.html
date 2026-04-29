@@ -177,6 +177,32 @@
   tbody tr:nth-child(1) td.rank,
   tbody tr:nth-child(2) td.rank,
   tbody tr:nth-child(3) td.rank { color:var(--yellow); }
+  .section-head {
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    margin: 32px 0 14px;
+    padding: 0 4px;
+  }
+  .section-head h2 {
+    font-size:18px; font-weight:700; color:var(--text);
+    letter-spacing:-0.01em; margin:0;
+  }
+  .section-head .pill {
+    font-size:11px; font-weight:700;
+    padding:3px 10px; border-radius:999px;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .section-head .pill.dip   { color:var(--red);   background:rgba(255,90,106,0.18); }
+  .section-head .pill.swing { color:var(--green); background:rgba(34,211,160,0.18); }
+  .section-head .sub {
+    font-size:12px; color:var(--muted); font-weight:500;
+  }
+  .swing-badge {
+    display:inline-block;
+    font-size:11px; font-weight:700; color:var(--green);
+    background:rgba(34,211,160,0.18);
+    padding:2px 7px; border-radius:4px;
+    font-family:'JetBrains Mono',monospace;
+  }
   .vol-cell .vol-main { font-size:12px; }
   .vol-cell .vol-x   { font-size:10px; color:var(--muted); margin-left:3px; }
   .vol-cell .vol-x.pos { color:var(--green); }
@@ -290,7 +316,11 @@
     </div>
   </div>
 
-  <table id="scanner" style="display:none">
+  <div class="section-head">
+      <h2>Buy the Dip <span class="pill dip">Top 30</span></h2>
+      <span class="sub">Technical pullback + AI bonus stacks</span>
+    </div>
+    <table id="scanner" style="display:none">
       <thead>
         <tr>
           <th class="rank-th">#</th>
@@ -313,6 +343,30 @@
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
+    </table>
+
+    <div class="section-head">
+      <h2>Swing Trade <span class="pill swing">Top 20</span></h2>
+      <span class="sub">Pullback in uptrend · 5-15 day hold · stop -7% / target +15%</span>
+    </div>
+    <table id="scanner-swing" style="display:none">
+      <thead>
+        <tr>
+          <th class="rank-th">#</th>
+          <th>Ticker</th>
+          <th class="col-hide-md">Sector</th>
+          <th class="num">Price</th>
+          <th class="num">1d%</th>
+          <th class="num col-hide-sm">1m%</th>
+          <th class="num">Pull</th>
+          <th class="num col-hide-sm">RSI</th>
+          <th class="num">Swing</th>
+          <th class="num">Entry</th>
+          <th class="num col-hide-sm">Stop</th>
+          <th class="num col-hide-sm">Target</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-swing"></tbody>
     </table>
   </div>
   <div class="disclaimer">
@@ -499,7 +553,12 @@ function buildFilters() {
 }
 
 function getFiltered() {
-  const all = DATA.tickers.slice();
+  let all = DATA.tickers.slice();
+  // Buy-the-Dip Top 30 view: filter to top_dip_symbols when present
+  if (Array.isArray(DATA.top_dip_symbols) && DATA.top_dip_symbols.length) {
+    const dipSet = new Set(DATA.top_dip_symbols);
+    all = all.filter(function(t){ return dipSet.has(t.symbol); });
+  }
   const filters = {
     all: function(t){return true;},
     setup_ready: function(t){return t.rotation_flag === 'setup_ready';},
@@ -636,6 +695,45 @@ function bindHeaderSort() {
   });
 }
 
+function renderSwingTable() {
+  if (!DATA) return;
+  const swingSyms = DATA.top_swing_symbols || [];
+  const symMap = {};
+  (DATA.tickers || []).forEach(function(t){ symMap[t.symbol] = t; });
+  const rows = swingSyms.map(function(s){ return symMap[s]; }).filter(Boolean);
+  const tbl = document.getElementById('scanner-swing');
+  const tb  = document.getElementById('tbody-swing');
+  if (!tbl || !tb) return;
+  if (!rows.length) { tbl.style.display = 'none'; return; }
+  tbl.style.display = '';
+  tb.innerHTML = rows.map(function(t, i){
+    const rank = i + 1;
+    const rsi = t.tech ? t.tech.rsi_14 : null;
+    const rc = rsiClass(rsi);
+    const e = t.swing_entry || {};
+    const entryTxt = (e.entry_low != null && e.entry_high != null)
+      ? ('$' + e.entry_low.toFixed(0) + '-$' + e.entry_high.toFixed(0))
+      : '—';
+    const stopTxt = e.stop != null ? ('$' + e.stop.toFixed(2)) : '—';
+    const tgtTxt  = e.target != null ? ('$' + e.target.toFixed(2)) : '—';
+    const sw = t.swing_score || 0;
+    return '<tr onclick="location.href=\'ticker/' + t.symbol + '.html\'">' +
+      '<td class="rank">' + rank + '</td>' +
+      '<td><div class="sym">' + t.symbol + '</div><div class="sym-name">' + (t.name || '') + '</div></td>' +
+      '<td class="col-hide-md"><span class="sector-tag">' + (t.sector || '—') + '</span></td>' +
+      '<td class="num">' + fmtPrice(t.price) + sessBadge(t.session) + '</td>' +
+      '<td class="num ' + pctCls(t.change_d1_pct) + '">' + fmtPct(t.change_d1_pct) + '</td>' +
+      '<td class="num col-hide-sm ' + pctCls(t.change_1m_pct) + '">' + fmtPct(t.change_1m_pct) + '</td>' +
+      '<td class="num ' + pctCls(t.pullback_from_high_pct) + '">' + fmtPct(t.pullback_from_high_pct) + '</td>' +
+      '<td class="num col-hide-sm"><span class="rsi-pill ' + rc + '">' + fmtNum(rsi, 0) + '</span></td>' +
+      '<td class="num"><span class="swing-badge">' + sw + '</span></td>' +
+      '<td class="num">' + entryTxt + '</td>' +
+      '<td class="num col-hide-sm">' + stopTxt + '</td>' +
+      '<td class="num col-hide-sm">' + tgtTxt + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
 async function load() {
   try {
     const r = await fetch('dataset.json?v=' + Date.now());
@@ -647,6 +745,7 @@ async function load() {
     buildKPIs();
     buildFilters();
     renderTable();
+    renderSwingTable();
     renderRails(DATA.rails);
     bindHeaderSort();
     updateAgo();
